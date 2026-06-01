@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Ticket Audit</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="styles.css"/>
+</head>
+<body>
+<div class="app">
+  <header class="header">
+    <div class="header-pulse"></div>
+    <h1>Ticket Audit</h1>
+    <div class="header-right">
+      <span class="status-chip" id="status-chip">Ready</span>
+    </div>
+  </header>
+
+  <div class="body">
+    <main class="main-content">
+      <div class="controls-area">
+        <div class="field">
+          <label>Start Date</label>
+          <input type="date" id="start-date"/>
+        </div>
+        <div class="field">
+          <label>End Date</label>
+          <input type="date" id="end-date"/>
+        </div>
+        <div class="field">
+          <label>Resolver Group <span style="opacity:.6">(optional)</span></label>
+          <input type="text" id="resolver-group" placeholder="e.g. Network"/>
+        </div>
+        <button class="btn-run" id="btn-run" onclick="startAudit()">Start Audit</button>
+      </div>
+
+      <div class="progress-section" id="progress-section" style="display:none">
+        <div class="progress-title">Progress</div>
+        <div class="progress-counter" id="progress-counter"></div>
+        <div class="log-terminal" id="log-terminal">
+          <span class="log-line info">Starting...</span>
+        </div>
+      </div>
+
+      <div class="empty-state" id="empty-state">
+        <div class="empty-icon">📋</div>
+        <div class="empty-text">Select dates and click <strong>Start Audit</strong></div>
+      </div>
+
+      <div id="results-area" class="hidden results-container">
+        <div>
+          <div class="results-title">Results</div>
+          <div class="cards">
+            <div class="card c-blue">
+              <span class="c-label">Total Audited</span>
+              <span class="c-value" id="s-total">—</span>
+            </div>
+            <div class="card c-green">
+              <span class="c-label">Passed</span>
+              <span class="c-value" id="s-passed">—</span>
+            </div>
+            <div class="card c-red">
+              <span class="c-label">Failed</span>
+              <span class="c-value" id="s-failed">—</span>
+            </div>
+          </div>
+        </div>
+
+        <div id="failure-analysis-area" class="failure-analysis-area">
+          <div class="failure-analysis-title">Failure Analysis by Metric</div>
+          <div class="metric-list" id="metric-list">
+            <!-- Populated by script.js -->
+          </div>
+        </div>
+
+        <div class="download-section">
+          <a class="btn-download" id="btn-download" href="#" target="_blank">
+            ↓ Download Report
+          </a>
+          <button class="btn-email" id="btn-email" onclick="sendEmailReport()">✉ Send via Email</button>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
+
