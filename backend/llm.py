@@ -1,151 +1,189 @@
-
 import os
+from dotenv import load_dotenv
 from openai import OpenAI
+
+load_dotenv()
 
 
 class LLM:
 
     def __init__(self):
+
+        api_key = os.getenv("GROQ_API_KEY")
+
+        if not api_key:
+            raise ValueError("GROQ_API_KEY not found in environment variables")
+
         self.client = OpenAI(
-            api_key=os.environ.get("GROQ_API_KEY"),
-            base_url="https://api.groq.com/openai/v1",
+            api_key=api_key,
+            base_url="https://api.groq.com/openai/v1"
         )
-        self.model = "openai/gpt-oss-20b"   # correct Groq model ID - openai/gpt-oss-20b
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Internal helper
-    # ─────────────────────────────────────────────────────────────────────────
+        self.model = "llama-3.3-70b-versatile"
 
-    def _call(self, prompt: str, context: str = "") -> str:
-        """
-        Single entry point for all Groq API calls.
+    # ==========================================================
+    # Internal LLM Call
+    # ==========================================================
 
-        Args:
-            prompt  : The user prompt to send
-            context : Optional label for error messages
+    def _call(self, prompt: str) -> str:
 
-        Returns:
-            Raw stripped response string from the model
-        """
         try:
             response = self.client.chat.completions.create(
-                model       = self.model,
-                messages    = [{"role": "user", "content": prompt}],
-                temperature = 0,
-                max_tokens  = 10,
+                model=self.model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                temperature=0,
+                max_tokens=20
             )
-            return response.choices[0].message.content.strip()
 
-        except Exception as e:
-            print(f"  LLM error [{context}]: {e}")
+            content = response.choices[0].message.content
+
+            if not content:
+                return ""
+
+            return content.strip()
+
+        except Exception:
             return ""
+
+    # ==========================================================
+    # Normalize output to Yes / No
+    # ==========================================================
 
     @staticmethod
     def _to_yes_no(raw: str, default: str = "No") -> str:
-        """Normalise any model response to 'Yes' or 'No'."""
-        if "yes" in raw.lower():
+
+        if not raw:
+            return default
+
+        text = raw.strip().lower()
+
+        if text.startswith("yes"):
             return "Yes"
-        if "no" in raw.lower():
+
+        if text.startswith("no"):
             return "No"
+
         return default
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Audit methods
-    # ─────────────────────────────────────────────────────────────────────────
+    # ==========================================================
+    # Short Description Analysis
+    # ==========================================================
 
     def short_desc_analyser(self, short_description: str) -> str:
-        """
-        Is the short description clearly aligned to a user or technical problem?
 
-        Evaluation criteria:
-            - Does it mention what is not working or what the user needs?
-            - Is there enough context to understand the problem?
-            - Brief is fine — it does not need to be perfectly worded.
-            - Reject only if completely vague (e.g. just "issue" or "problem").
-
-        Args:
-            short_description: The incident short_description field
-
-        Returns:
-            "Yes" or "No"
-        """
         if not short_description or not short_description.strip():
             return "No"
 
-        prompt = f"""You are auditing an IT service desk ticket.
+        prompt = f"""
+Answer ONLY with Yes or No.
 
-Short Description: "{short_description}"
+Short Description:
+"{short_description}"
 
-Does this short description clearly describe either a user problem or a technical problem?
+Return Yes if the issue can be understood.
 
-Guidelines:
-- A good description mentions what is not working or what the user cannot do.
-  Examples: "can't login to GWS", "printer offline", "laptop running slow", "VPN not connecting"
-- It does NOT need to be perfectly worded or grammatically correct.
-- Brief but specific is acceptable.
-- Only answer "No" if it is completely vague with no context, such as just "issue", "problem", or "help needed".
+Return No if it is too generic.
 
-Respond with ONLY "Yes" or "No".
+Examples:
+Issue -> No
+Problem -> No
+Error -> No
+Help Needed -> No
 
-Response:"""
+User cannot access email on mobile -> Yes
+Printer not printing -> Yes
+VPN connection failing -> Yes
 
-        raw = self._call(prompt, context=f"short_desc [{short_description}]")
-        return self._to_yes_no(raw, default="No")
+Answer:
+"""
 
-    def resolution_notes_analyser(self, close_notes: str, work_notes: list) -> str:
-        """
-        Do the resolution notes contain a proper finding and resolution steps?
+        raw = self._call(prompt)
 
-        Checks close_notes AND all work notes combined — the finding and steps
-        can be spread across multiple entries.
+        return self._to_yes_no(raw)
 
-        Evaluation criteria:
-            1. FINDING   — what was the root cause or diagnosis?
-            2. RESOLUTION STEPS — what actions were taken to fix it?
+    # ==========================================================
+    # Resolution Notes Analysis
+    # ==========================================================
 
-        Args:
-            close_notes : close_notes field from the incident (str)
-            work_notes  : full list of work note entry dicts { value, ... }
+    def resolution_notes_analyser(
+        self,
+        close_notes: str,
+        work_notes: list
+    ) -> str:
 
-        Returns:
-            "Yes" or "No"
-        """
-        # Build combined work notes text
-        work_notes_text = "\n".join(
-            f"- {(entry.get('value', '') if isinstance(entry, dict) else entry).strip()}"
-            for entry in work_notes
-            if (entry.get('value', '') if isinstance(entry, dict) else entry).strip()
-        )
+        close_notes = close_notes or ""
 
-        # Quick reject — nothing to analyse
-        if not (close_notes or "").strip() and not work_notes_text.strip():
+        work_note_lines = []
+
+        for item in work_notes:
+
+            if isinstance(item, dict):
+                value = item.get("value", "").strip()
+            else:
+                value = str(item).strip()
+
+            if value:
+                work_note_lines.append(value)
+
+        work_notes_text = "\n".join(work_note_lines)
+
+        if not close_notes.strip() and not work_notes_text.strip():
             return "No"
 
-        prompt = f"""You are auditing an IT service desk incident resolution.
+        prompt = f"""
+Answer ONLY with Yes or No.
 
-Resolution Notes (close_notes):
-"{close_notes or 'Not provided.'}"
+Resolution Notes:
+{close_notes}
 
-Work Notes (chronological):
-{work_notes_text if work_notes_text else "No work notes available."}
+Work Notes:
+{work_notes_text}
 
-Does the above contain BOTH of the following across ANY of the notes combined?
+You are reviewing service desk resolution notes.
 
-1. FINDING — An explanation of what the root cause or diagnosis was.
-   Examples: "corrupted driver", "disk full", "account locked", "hardware failure", "misconfigured DNS"
+Be LENIENT.
 
-2. RESOLUTION STEPS — The actual actions taken to fix the issue.
-   Examples: "reinstalled driver", "cleared disk space", "unlocked account", "replaced hardware", "updated DNS record"
+Return Yes if the notes contain ANY meaningful troubleshooting,
+resolution activity, action taken, user communication, validation,
+or progress towards resolution.
 
-Guidelines:
-- The finding and resolution steps can be spread across close_notes and work notes together.
-- Brief but specific is acceptable. "Driver reinstalled, user confirmed working" qualifies.
-- Only answer "No" if there is genuinely NO explanation of what was done or why.
-- Vague statements alone like "resolved", "fixed", "system appears normal", "issue no longer present" do NOT qualify.
+Examples that should return Yes:
 
-Respond with ONLY "Yes" or "No".
+- Reset password and user confirmed access.
+- Replaced faulty hard drive.
+- Cleared cache and cookies.
+- Restarted service.
+- User confirmed issue resolved.
+- Escalated to network team.
+- Provided instructions to user.
+- User tested and confirmed working.
+- Reinstalled application.
+- Account unlocked.
+- Investigated issue and found configuration problem.
+- Contacted user and gathered additional information.
+- Waiting for user confirmation after applying fix.
 
-Response:"""
+Return No ONLY when the notes are too vague and provide no useful information.
 
-        raw = self._call(prompt, context=f"resolution_notes")
-        return self._to_yes_no(raw, default="No")
+Examples that should return No:
+
+- Resolved.
+- Fixed.
+- Done.
+- Closed.
+- Completed.
+- Working now.
+
+without any explanation.
+
+Answer:
+"""
+
+        raw = self._call(prompt)
+
+        return self._to_yes_no(raw)

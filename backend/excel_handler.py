@@ -64,7 +64,7 @@ class ExcelHandler:
         worksheet[f'D{self.current_row}'] = auditor_data.get('tcs_resolver_group', '')
         worksheet[f'E{self.current_row}'] = auditor_data.get('resolved_by', '')
         
-        worksheet[f'F{self.current_row}'] = auditor_data.get('response_within_sla', 'NA')
+        worksheet[f'F{self.current_row}'] = auditor_data.get('response_sla_met', 'NA')
         worksheet[f'G{self.current_row}'] = auditor_data.get('short_desc_quality', 'NA')
         worksheet[f'H{self.current_row}'] = auditor_data.get('priority_reassessed', 'NA')
         worksheet[f'I{self.current_row}'] = auditor_data.get('incident_reassigned', 'NA')
@@ -73,7 +73,7 @@ class ExcelHandler:
         worksheet[f'L{self.current_row}'] = auditor_data.get('work_notes_regular_update', 'NA')
         worksheet[f'M{self.current_row}'] = auditor_data.get('resolution_notes_quality', 'NA')
         
-        worksheet[f'N{self.current_row}'] = auditor_data.get('resolution_sla', 'NA')
+        worksheet[f'N{self.current_row}'] = auditor_data.get('resolution_sla_met', 'NA')
         worksheet[f'O{self.current_row}'] = auditor_data.get('user_confirmation', 'NA')
         worksheet[f'P{self.current_row}'] = auditor_data.get('reopened_user_connect', 'NA')
         worksheet[f'Q{self.current_row}'] = auditor_data.get('kba_education', 'NA')

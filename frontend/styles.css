@@ -68,7 +68,7 @@ button { cursor: pointer; }
 
 .controls-area {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr auto auto;
+  grid-template-columns: 1fr 1fr 1fr 1fr auto auto;
   gap: 16px;
   align-items: flex-end;
   margin-bottom: 40px;
@@ -106,6 +106,24 @@ button { cursor: pointer; }
 }
 
 .field input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+
+.field select {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 13px;
+  padding: 10px 12px;
+  outline: none;
+  transition: border-color .15s, box-shadow .15s;
+  cursor: pointer;
+}
+
+.field select:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-dim);
 }

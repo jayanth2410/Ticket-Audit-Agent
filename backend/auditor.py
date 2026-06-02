@@ -122,6 +122,11 @@ class Auditor:
         self.closed_at    = incident.get("closed_at", "")
         self.calendar_stc = incident.get("calendar_stc", "")
         self.business_stc = incident.get("business_stc", "")
+        
+        # ── SLA breach data (from task_sla table) ──────────────────────────────
+        sla_data = incident.get("sla_data", {}) or {}
+        self.response_sla_breached = sla_data.get("response_sla_breached")
+        self.resolution_sla_breached = sla_data.get("resolution_sla_breached")
 
         # ── Description ───────────────────────────────────────────────────────
         self.short_description = incident.get("short_description", "")
@@ -183,35 +188,21 @@ class Auditor:
         Returns:
             List of { sys_created_on, sys_created_by, value }
         """
-        entries = []
         if not combined:
-            return entries
+            return []
 
         pattern = re.compile(
-            r'^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]\s+(\S+)\n(.*)',
+            r'\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]\s+(.+?)\n(.*?)(?=\[\d{4}-\d{2}-\d{2}|\Z)',
             re.DOTALL
         )
 
-        for block in combined.strip().split("\n\n"):
-            block = block.strip()
-            if not block:
-                continue
-
-            match = pattern.match(block)
-            if match:
-                entries.append({
-                    "sys_created_on": match.group(1),
-                    "sys_created_by": match.group(2),
-                    "value"         : match.group(3).strip(),
-                })
-            else:
-                # Fallback — no timestamp header, store raw text
-                entries.append({
-                    "sys_created_on": "",
-                    "sys_created_by": "",
-                    "value"         : block,
-                })
-
+        entries = []
+        for match in pattern.finditer(combined):
+            entries.append({
+                "sys_created_on": match.group(1).strip(),
+                "sys_created_by": match.group(2).strip(),
+                "value"         : match.group(3).strip(),
+            })
         return entries
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -520,6 +511,36 @@ class Auditor:
 
         return "No"
 
+    def check_response_sla(self) -> str:
+        """
+        Was the response SLA met (not breached)?
+        Source : response_sla_breached field from task_sla table
+        
+        Returns:
+            "Yes" if response SLA was not breached
+            "No" if response SLA was breached
+            "NA" if no SLA data available
+        """
+        if self.response_sla_breached is None:
+            return "NA"
+        
+        return "Yes" if str(self.response_sla_breached).lower() != "true" else "No"
+
+    def check_resolution_sla(self) -> str:
+        """
+        Was the resolution SLA met (not breached)?
+        Source : resolution_sla_breached field from task_sla table
+        
+        Returns:
+            "Yes" if resolution SLA was not breached
+            "No" if resolution SLA was breached
+            "NA" if no SLA data available
+        """
+        if self.resolution_sla_breached is None:
+            return "NA"
+        
+        return "Yes" if str(self.resolution_sla_breached).lower() != "true" else "No"
+
     # ─────────────────────────────────────────────────────────────────────────
     # Report output
     # ─────────────────────────────────────────────────────────────────────────
@@ -538,7 +559,9 @@ class Auditor:
             "resolved_by"              : self.resolved_by,
 
             # Scoring columns
-            "response_within_sla"      : self.responsewithinSLA(),
+            "response_sla_met"         : self.check_response_sla(),
+            "resolution_sla_met"       : self.check_resolution_sla(),
+            #"response_within_sla"      : self.responsewithinSLA(),
             "short_desc_quality"       : self.short_desc_quality(),
             "priority_reassessed"      : self.is_priority_reassessed(),
             "incident_reassigned"      : self.is_incident_reassigned(),
@@ -546,7 +569,6 @@ class Auditor:
             "pending_status"           : self.check_pending_status(),
             "work_notes_regular_update": self.check_work_notes_regular_update(),
             "resolution_notes_quality" : self.check_resolution_notes(),
-            "resolution_sla"           : self.responsewithinSLA(),
             "user_confirmation"        : self.check_user_confirmation_before_resolve(),
             "reopened_user_connect"    : self.check_reopened_and_user_connect(),
             "kba_education"            : self.check_kba_education(),

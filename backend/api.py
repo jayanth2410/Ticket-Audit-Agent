@@ -44,9 +44,9 @@ app  = Flask(__name__)
 CORS(app)
 
 # ── Credentials ───────────────────────────────────────────────────────────────
-SERVICENOW_INSTANCE = os.getenv("SERVICENOW_INSTANCE", "https://dev392253.service-now.com")
-SERVICENOW_USER     = os.getenv("SERVICENOW_USER",     "admin")
-SERVICENOW_PASSWORD = os.getenv("SERVICENOW_PASSWORD", "afi+0^JBr4LX")
+SERVICENOW_INSTANCE = os.getenv("SERVICENOW_INSTANCE")
+SERVICENOW_USER     = os.getenv("SERVICENOW_USER")
+SERVICENOW_PASSWORD = os.getenv("SERVICENOW_PASSWORD")
 TEMPLATE_PATH       = str(BACKEND_DIR.parent / "Audit_Report_Template.xlsx")
 
 # ── In-memory job store ───────────────────────────────────────────────────────
@@ -103,7 +103,7 @@ def compute_score(audit_data: dict) -> dict:
 # Background audit worker
 # ─────────────────────────────────────────────────────────────────────────────
 
-def run_audit_job(job_id: str, start_date: str, end_date: str, resolver_group: str):
+def run_audit_job(job_id: str, ticket_type: str, start_date: str, end_date: str, resolver_group: str):
     """Full fetch + audit pipeline. Runs in a background thread."""
     job   = JOBS[job_id]
     log_q = job["log_queue"]
@@ -118,8 +118,9 @@ def run_audit_job(job_id: str, start_date: str, end_date: str, resolver_group: s
         log(f"Connecting to ServiceNow: {SERVICENOW_INSTANCE}")
         fetcher = IncidentFetcher(SERVICENOW_INSTANCE, SERVICENOW_USER, SERVICENOW_PASSWORD, log_callback=log)
 
-        log(f"Fetching closed incidents from {start_date} to {end_date}...")
+        log(f"Fetching closed {ticket_type} from {start_date} to {end_date}...")
         incidents = fetcher.fetch_incidents_in_range(
+            ticket_type,
             start_date,
             end_date,
             resolver_group=resolver_group or None,
@@ -230,12 +231,16 @@ def run_audit_job(job_id: str, start_date: str, end_date: str, resolver_group: s
 def run_audit():
     """Start an audit job. Returns job_id immediately."""
     body           = request.json or {}
+    ticket_type    = body.get("ticket_type", "incident").strip()
     start_date     = body.get("start_date", "").strip()
     end_date       = body.get("end_date",   "").strip()
     resolver_group = body.get("resolver_group", "").strip()
 
     if not start_date or not end_date:
         return jsonify({"error": "start_date and end_date are required"}), 400
+
+    if ticket_type not in ["incident", "service_request", "change_request"]:
+        return jsonify({"error": "Invalid ticket_type"}), 400
 
     job_id = str(uuid.uuid4())[:8]
     JOBS[job_id] = {
@@ -247,7 +252,7 @@ def run_audit():
 
     threading.Thread(
         target=run_audit_job,
-        args=(job_id, start_date, end_date, resolver_group),
+        args=(job_id, ticket_type, start_date, end_date, resolver_group),
         daemon=True,
     ).start()
 

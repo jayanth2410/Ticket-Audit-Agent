@@ -101,6 +101,7 @@ function streamLogs(jobId) {
 }
 
 async function startAudit() {
+  const ticketType = document.getElementById('ticket-type').value;
   const startDate = document.getElementById('start-date').value;
   const endDate = document.getElementById('end-date').value;
   const resolverGroup = document.getElementById('resolver-group').value.trim();
@@ -129,13 +130,14 @@ async function startAudit() {
   document.getElementById('btn-run').disabled = true;
   setStatus('Running', 'running');
 
-  log(`Starting audit: ${startDate} → ${endDate}`, 'info');
+  log(`Starting audit for ${ticketType}: ${startDate} → ${endDate}`, 'info');
 
   try {
     const res = await fetch(`${API}/run-audit`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        ticket_type: ticketType,
         start_date: startDate,
         end_date: endDate,
         resolver_group: resolverGroup,
