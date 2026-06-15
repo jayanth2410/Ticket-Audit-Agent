@@ -4,3 +4,5 @@ python-dotenv
 requests
 openpyxl
 openai
+sqlalchemy
+psycopg2-binary

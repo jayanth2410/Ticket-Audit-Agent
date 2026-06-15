@@ -1,100 +1,319 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Ticket Audit</title>
+  <title>Ticket Audit — Quality Intelligence</title>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
   <link rel="stylesheet" href="styles.css"/>
 </head>
 <body>
-<div class="app">
-  <header class="header">
-    <div class="header-pulse"></div>
-    <h1>Ticket Audit</h1>
-    <div class="header-right">
-      <span class="status-chip" id="status-chip">Ready</span>
+
+<div class="shell">
+
+  <!-- ══ Sidebar ══════════════════════════════════════════════════════════ -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-mark">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+          <path d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <div class="logo-text">
+        <span class="logo-title">AuditIQ</span>
+        <span class="logo-sub">Ticket Quality Intelligence</span>
+      </div>
     </div>
-  </header>
 
-  <div class="body">
-    <main class="main-content">
-      <div class="controls-area">
-        <div class="field">
-          <label>Ticket Type</label>
-          <select id="ticket-type">
-            <option value="incident">Incident</option>
-            <option value="service_request">Service Request</option>
-            <option value="change_request">Change Request</option>
-          </select>
-        </div>
-        <div class="field">
-          <label>Start Date</label>
-          <input type="date" id="start-date"/>
-        </div>
-        <div class="field">
-          <label>End Date</label>
-          <input type="date" id="end-date"/>
-        </div>
-        <div class="field">
-          <label>Resolver Group <span style="opacity:.6">(optional)</span></label>
-          <input type="text" id="resolver-group" placeholder="e.g. Network"/>
-        </div>
-        <button class="btn-run" id="btn-run" onclick="startAudit()">Start Audit</button>
+    <nav class="sidebar-nav">
+      <a href="#" class="nav-item active" data-view="audit">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>Run Audit</span>
+      </a>
+      <a href="#" class="nav-item" data-view="results">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none"><path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>Results</span>
+        <span class="nav-badge hidden" id="nav-badge">0</span>
+      </a>
+      <a href="#" class="nav-item" data-view="metrics">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.75"/><path d="M12 6v6l4 2" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
+        <span>Metric Analysis</span>
+      </a>
+      <a href="#" class="nav-item" data-view="tickets">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none"><path d="M4 6h16M4 10h16M4 14h8M4 18h8" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
+        <span>Tickets</span>
+      </a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <button class="theme-toggle" id="theme-toggle" title="Toggle theme">
+        <svg class="icon-sun" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="1.75"/><path d="M12 2v2M12 20v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M2 12h2M20 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
+        <svg class="icon-moon" viewBox="0 0 24 24" fill="none"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span id="theme-label">Light Mode</span>
+      </button>
+      <div class="server-status" id="server-status">
+        <span class="status-dot"></span>
+        <span id="server-status-text">Connecting…</span>
       </div>
+    </div>
+  </aside>
 
-      <div class="progress-section" id="progress-section" style="display:none">
-        <div class="progress-title">Progress</div>
-        <div class="progress-counter" id="progress-counter"></div>
-        <div class="log-terminal" id="log-terminal">
-          <span class="log-line info">Starting...</span>
+  <!-- ══ Main ══════════════════════════════════════════════════════════════ -->
+  <div class="main">
+
+    <!-- Top bar -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <h1 class="page-title" id="page-title">Run Audit</h1>
+        <div class="breadcrumb" id="breadcrumb">Configure and launch a new audit</div>
+      </div>
+      <div class="topbar-right">
+        <div class="job-status-pill" id="job-pill" style="display:none">
+          <span class="job-dot"></span>
+          <span id="job-pill-text">Running…</span>
         </div>
       </div>
+    </header>
 
-      <div class="empty-state" id="empty-state">
-        <div class="empty-icon">📋</div>
-        <div class="empty-text">Select dates and click <strong>Start Audit</strong></div>
-      </div>
+    <!-- ── VIEW: Audit ────────────────────────────────────────────────── -->
+    <div class="view active" id="view-audit">
+      <div class="view-inner">
 
-      <div id="results-area" class="hidden results-container">
-        <div>
-          <div class="results-title">Results</div>
-          <div class="cards">
-            <div class="card c-blue">
-              <span class="c-label">Total Audited</span>
-              <span class="c-value" id="s-total">—</span>
+        <!-- Config card -->
+        <div class="config-card">
+          <div class="config-card-head">
+            <div>
+              <div class="config-title">Audit Configuration</div>
+              <div class="config-sub">Set the date range, resolver group and pass threshold</div>
             </div>
-            <div class="card c-green">
-              <span class="c-label">Passed</span>
-              <span class="c-value" id="s-passed">—</span>
+          </div>
+          <div class="config-body">
+            <div class="config-grid">
+              <div class="form-group">
+                <label class="form-label">Start Date <span class="req">*</span></label>
+                <div class="input-wrap">
+                  <svg class="input-icon" viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="18" rx="2" stroke="currentColor" stroke-width="1.75"/><path d="M16 2v4M8 2v4M3 10h18" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
+                  <input type="date" id="start-date" class="form-input"/>
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">End Date <span class="req">*</span></label>
+                <div class="input-wrap">
+                  <svg class="input-icon" viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="18" rx="2" stroke="currentColor" stroke-width="1.75"/><path d="M16 2v4M8 2v4M3 10h18" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
+                  <input type="date" id="end-date" class="form-input"/>
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Resolver Group <span class="form-opt">optional</span></label>
+                <div class="input-wrap">
+                  <svg class="input-icon" viewBox="0 0 24 24" fill="none"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75M9 7a4 4 0 110 8 4 4 0 010-8z" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
+                  <input type="text" id="resolver-group" class="form-input" placeholder="e.g. TCS-INFRA-SUPPORT"/>
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Pass Threshold %</label>
+                <div class="input-wrap">
+                  <svg class="input-icon" viewBox="0 0 24 24" fill="none"><path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
+                  <input type="number" id="pass-threshold" class="form-input" min="0" max="100" step="1" value="70"/>
+                </div>
+              </div>
             </div>
-            <div class="card c-red">
-              <span class="c-label">Failed</span>
-              <span class="c-value" id="s-failed">—</span>
+            <div class="config-actions">
+              <button class="btn btn-primary btn-lg" id="btn-run" onclick="startAudit()">
+                <svg viewBox="0 0 24 24" fill="none"><polygon points="5,3 19,12 5,21" fill="currentColor"/></svg>
+                Start Audit
+              </button>
             </div>
           </div>
         </div>
 
-        <div id="failure-analysis-area" class="failure-analysis-area">
-          <div class="failure-analysis-title">Failure Analysis by Metric</div>
-          <div class="metric-list" id="metric-list">
-            <!-- Populated by script.js -->
+        <!-- Log terminal -->
+        <div class="terminal-card" id="terminal-card" style="display:none">
+          <div class="terminal-head">
+            <div class="terminal-dots">
+              <span class="tdot red"></span>
+              <span class="tdot yellow"></span>
+              <span class="tdot green"></span>
+            </div>
+            <span class="terminal-title">Audit Log</span>
+            <div class="terminal-progress" id="terminal-progress"></div>
+          </div>
+          <div class="terminal-body" id="log-terminal"></div>
+        </div>
+
+        <!-- Empty state -->
+        <div class="empty-state" id="empty-state">
+          <div class="empty-graphic">
+            <svg viewBox="0 0 120 120" fill="none">
+              <circle cx="60" cy="60" r="50" stroke="var(--border)" stroke-width="2" stroke-dasharray="8 4"/>
+              <path d="M45 60l10 10 20-20" stroke="var(--accent)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <div class="empty-title">Ready to Audit</div>
+          <div class="empty-desc">Configure your date range and click <strong>Start Audit</strong> to begin quality analysis</div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ── VIEW: Results ──────────────────────────────────────────────── -->
+    <div class="view" id="view-results">
+      <div class="view-inner">
+
+        <!-- KPI strip -->
+        <div class="kpi-strip" id="kpi-strip">
+          <div class="kpi-card kpi-blue">
+            <div class="kpi-icon">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
+            </div>
+            <div class="kpi-body">
+              <div class="kpi-label">Total Audited</div>
+              <div class="kpi-value" id="s-total">—</div>
+            </div>
+          </div>
+          <div class="kpi-card kpi-green">
+            <div class="kpi-icon">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
+            </div>
+            <div class="kpi-body">
+              <div class="kpi-label">Passed</div>
+              <div class="kpi-value" id="s-passed">—</div>
+            </div>
+          </div>
+          <div class="kpi-card kpi-red">
+            <div class="kpi-icon">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
+            </div>
+            <div class="kpi-body">
+              <div class="kpi-label">Failed</div>
+              <div class="kpi-value" id="s-failed">—</div>
+            </div>
+          </div>
+          <div class="kpi-card kpi-amber">
+            <div class="kpi-icon">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
+            </div>
+            <div class="kpi-body">
+              <div class="kpi-label">Pass Rate</div>
+              <div class="kpi-value" id="s-pct">—</div>
+            </div>
+          </div>
+          <div class="kpi-card kpi-purple">
+            <div class="kpi-icon">
+              <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.75"/><path d="M12 8v4l3 3" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
+            </div>
+            <div class="kpi-body">
+              <div class="kpi-label">Avg Score</div>
+              <div class="kpi-value" id="s-avg">—</div>
+            </div>
           </div>
         </div>
 
-        <div class="download-section">
-          <a class="btn-download" id="btn-download" href="#" target="_blank">
-            ↓ Download Report
-          </a>
-          <button class="btn-email" id="btn-email" onclick="sendEmailReport()">✉ Send via Email</button>
+        <!-- Chart row -->
+        <div class="chart-row">
+          <div class="chart-card">
+            <div class="chart-card-title">Pass / Fail Distribution</div>
+            <div class="donut-wrap">
+              <canvas id="donut-chart" width="200" height="200"></canvas>
+              <div class="donut-center" id="donut-center">
+                <span class="donut-pct" id="donut-pct">—</span>
+                <span class="donut-label">Pass Rate</span>
+              </div>
+            </div>
+            <div class="donut-legend">
+              <span class="legend-dot green"></span><span>Pass</span>
+              <span class="legend-dot red"></span><span>Fail</span>
+            </div>
+          </div>
+          <div class="chart-card chart-card-wide">
+            <div class="chart-card-title">Top Failing Metrics</div>
+            <div class="top-fails" id="top-fails"></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-card-title">Audit Info</div>
+            <div class="audit-info" id="audit-info"></div>
+          </div>
+        </div>
+
+        <!-- Action bar -->
+        <div class="action-bar">
+          <div class="action-bar-left" id="action-bar-range"></div>
+          <div class="action-bar-right">
+            <a class="btn btn-outline" id="btn-download" href="#" target="_blank">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              Download Excel
+            </a>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ── VIEW: Metric Analysis ──────────────────────────────────────── -->
+    <div class="view" id="view-metrics">
+      <div class="view-inner">
+        <div class="section-header">
+          <div>
+            <div class="section-title">Metric Analysis</div>
+            <div class="section-sub">Quality breakdown across all 12 audit dimensions</div>
+          </div>
+          <div class="metric-filter-group">
+            <button class="filter-btn active" data-filter="all">All</button>
+            <button class="filter-btn" data-filter="fail">Failing</button>
+            <button class="filter-btn" data-filter="pass">Passing</button>
+          </div>
+        </div>
+        <div class="metrics-grid" id="metrics-grid">
+          <div class="empty-placeholder">Run an audit to see metric analysis</div>
         </div>
       </div>
-    </main>
+    </div>
+
+    <!-- ── VIEW: Tickets ──────────────────────────────────────────────── -->
+    <div class="view" id="view-tickets">
+      <div class="view-inner">
+        <div class="section-header">
+          <div>
+            <div class="section-title">Ticket Results</div>
+            <div class="section-sub" id="tickets-sub">Detailed per-ticket audit results</div>
+          </div>
+          <div class="tickets-toolbar">
+            <div class="search-wrap">
+              <svg viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="1.75"/><path d="M21 21l-4.35-4.35" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
+              <input type="text" id="ticket-search" class="search-input" placeholder="Search tickets…" oninput="filterTickets()"/>
+            </div>
+            <div class="filter-pills">
+              <button class="pill active" data-result="all" onclick="filterByResult(this,'all')">All</button>
+              <button class="pill pill-pass" data-result="PASS" onclick="filterByResult(this,'PASS')">PASS</button>
+              <button class="pill pill-fail" data-result="FAIL" onclick="filterByResult(this,'FAIL')">FAIL</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="ticket-table">
+          <div class="ticket-table-head">
+            <div class="th">Ticket</div>
+            <div class="th">Description</div>
+            <div class="th">Priority</div>
+            <div class="th">Resolved By</div>
+            <div class="th th-c">Score</div>
+            <div class="th th-c">Result</div>
+            <div class="th th-c">Detail</div>
+          </div>
+          <div class="ticket-table-body" id="ticket-table-body">
+            <div class="empty-placeholder">Run an audit to see ticket results</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
   </div>
 </div>
+
+<!-- ── Toast container ────────────────────────────────────────────────── -->
+<div class="toast-stack" id="toast-stack"></div>
 
 <script src="script.js"></script>
 </body>
 </html>
-

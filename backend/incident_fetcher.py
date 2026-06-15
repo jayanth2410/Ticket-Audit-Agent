@@ -17,7 +17,6 @@ Usage:
     fetcher.save_to_json(incidents, "incidents.json")
 """
 
-import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
 
@@ -31,7 +30,7 @@ from requests.auth import HTTPBasicAuth
 
 CLOSED_STATE        = "7"     # ServiceNow state value for Closed
 DEFAULT_LIMIT       = 1000    # Max incident records per API call
-CALLS_PER_INCIDENT  = 4       # work_notes + audit_history + emails + sla_data
+CALLS_PER_INCIDENT  = 3       # work_notes + audit_history + sla_data
 MAX_INCIDENT_WORKERS = 5      # incidents enriched simultaneously
                                # (keep ≤10 to avoid rate limiting)
 
@@ -138,30 +137,6 @@ class IncidentFetcher:
             print(f"  Warning: audit_history fetch failed for {sys_id}: {e}")
             return []
 
-    def _fetch_emails(self, sys_id: str) -> List[Dict[str, Any]]:
-        """
-        Fetch all emails sent/received from sys_email table.
-
-        Returns:
-            List of dicts — sys_created_on, direction, recipients, subject, body_text
-        """
-        url    = f"{self.instance_url}/api/now/table/sys_email"
-        params = {
-            "sysparm_query"   : f"instance.sys_id={sys_id}",
-            "sysparm_fields"  : "sys_created_on,direction,recipients,subject,body_text",
-            "sysparm_order_by": "sys_created_on",
-            "sysparm_limit"   : DEFAULT_LIMIT,
-        }
-
-        try:
-            resp = requests.get(url, auth=self.auth, headers=self.headers, params=params, verify=True)
-            resp.raise_for_status()
-            return resp.json().get("result", [])
-
-        except Exception as e:
-            print(f"  Warning: emails fetch failed for {sys_id}: {e}")
-            return []
-
     def _fetch_sla_data(self, sys_id: str) -> Dict[str, Any]:
         """
         Fetch response and resolution SLA breach status from task_sla table.
@@ -174,7 +149,7 @@ class IncidentFetcher:
         """
         url    = f"{self.instance_url}/api/now/table/task_sla"
         params = {
-            "sysparm_query"        : f"task={sys_id}^table_name={self.table_name}",
+            "sysparm_query"        : f"task.sys_id={sys_id}",
             "sysparm_fields"       : "sla.name,has_breached,stage",
             "sysparm_display_value": "true",
             "sysparm_limit"        : 10,
@@ -227,12 +202,10 @@ class IncidentFetcher:
         with ThreadPoolExecutor(max_workers=CALLS_PER_INCIDENT) as ex:
             f_wn    = ex.submit(self._fetch_work_notes,    sys_id)
             f_audit = ex.submit(self._fetch_audit_history, sys_id)
-            f_email = ex.submit(self._fetch_emails,        sys_id)
             f_sla   = ex.submit(self._fetch_sla_data,      sys_id)
 
             incident["work_notes"]    = f_wn.result()
             incident["audit_history"] = f_audit.result()
-            incident["emails"]        = f_email.result()
             incident["sla_data"]      = f_sla.result()
 
         return incident
@@ -329,20 +302,3 @@ class IncidentFetcher:
 
         self._log(f"All {total} {ticket_type}(s) enriched.")
         return enriched
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Persistence helpers
-    # ─────────────────────────────────────────────────────────────────────────
-
-    def save_to_json(self, incidents: List[Dict[str, Any]], filename: str) -> None:
-        """Save incidents list to a JSON file."""
-        with open(filename, "w") as f:
-            json.dump(incidents, f, indent=2)
-        self._log(f"Saved {len(incidents)} incidents to {filename}")
-
-    def load_from_json(self, filename: str) -> List[Dict[str, Any]]:
-        """Load incidents list from a JSON file."""
-        with open(filename, "r") as f:
-            incidents = json.load(f)
-        self._log(f"Loaded {len(incidents)} incidents from {filename}")
-        return incidents

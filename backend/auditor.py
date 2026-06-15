@@ -18,60 +18,6 @@ from llm import LLM
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Shared keyword lists (used across multiple methods)
-# ─────────────────────────────────────────────────────────────────────────────
-
-CONTACT_KEYWORDS = [
-    # phone
-    "called", "call", "phone", "rang", "dialled", "dialed",
-    "voicemail", "left message", "phone call", "tried calling",
-    # email
-    "emailed", "email sent", "sent email", "sent a mail",
-    "mail sent", "dropped a mail", "dropped an email",
-    # chat / messaging
-    "messaged", "chat", "teams", "slack", "whatsapp",
-    "im sent", "instant message", "pinged",
-    # generic
-    "contacted", "reached out", "attempted to contact",
-    "tried to reach", "contact attempt", "follow up", "followup",
-    "followed up", "notified user", "informed user",
-]
-
-USER_AVAILABLE_KEYWORDS = [
-    "user responded", "user replied", "user confirmed", "user available",
-    "user called back", "spoke with user", "user provided", "user agreed",
-    "user verified", "user acknowledged", "connected with user",
-    "user was available", "got in touch", "user accepted",
-    "user approved", "received response", "got response from user",
-]
-
-USER_UNAVAILABLE_KEYWORDS = [
-    "no response", "no reply", "user not available", "user unavailable",
-    "not reachable", "unreachable", "did not respond",
-    "could not reach", "no answer", "user not responding",
-]
-
-STRIKE_KEYWORDS = [
-    "strike",
-    "attempt 1", "attempt 2", "attempt 3",
-    "1st attempt", "2nd attempt", "3rd attempt",
-    "first attempt", "second attempt", "third attempt",
-    "reminder 1", "reminder 2", "reminder 3",
-    "follow up 1", "follow up 2", "follow up 3",
-    "followup 1", "followup 2", "followup 3",
-]
-
-CONFIRMATION_KEYWORDS = [
-    "user confirmed", "user verified", "user accepted", "user approved",
-    "confirmed by user", "user agreed", "user satisfaction", "user happy",
-    "user ok", "issue resolved by user", "user tested", "user checked",
-    "user validated", "user signed off", "confirmation received",
-    "user acknowledged", "user received and tested", "working fine",
-    "resolved with user", "closed with user",
-]
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # Helper
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -96,16 +42,10 @@ class Auditor:
         wn_raw = incident.get("work_notes", "") or ""
         cm_raw = incident.get("comments",   "") or ""
 
-        # ── System ────────────────────────────────────────────────────────────
-        self.sys_id = incident.get("sys_id", "")
-
         # ── Audit history — split into two filtered lists ─────────────────────
         audit_history               = incident.get("audit_history", []) or []
         self.priority_audit_history = [r for r in audit_history if r.get("fieldname") in ("priority", "impact", "urgency")]
         self.state_audit_history    = [r for r in audit_history if r.get("fieldname") == "state"]
-
-        # ── Emails ────────────────────────────────────────────────────────────
-        self.emails = incident.get("emails", []) or []
 
         # ── Report header fields ──────────────────────────────────────────────
         self.ticket_number      = incident.get("number", "")
@@ -115,14 +55,9 @@ class Auditor:
         self.resolved_by        = incident.get("resolved_by", "")
 
         # ── SLA ───────────────────────────────────────────────────────────────
-        self.made_sla     = incident.get("made_sla", "false")
-        self.sla_due      = incident.get("sla_due", "")
-        self.opened_at    = incident.get("opened_at", "")
-        self.resolved_at  = incident.get("resolved_at", "")
-        self.closed_at    = incident.get("closed_at", "")
-        self.calendar_stc = incident.get("calendar_stc", "")
-        self.business_stc = incident.get("business_stc", "")
-        
+        self.opened_at = incident.get("opened_at", "")
+        self.closed_at = incident.get("closed_at", "")
+
         # ── SLA breach data (from task_sla table) ──────────────────────────────
         sla_data = incident.get("sla_data", {}) or {}
         self.response_sla_breached = sla_data.get("response_sla_breached")
@@ -130,32 +65,18 @@ class Auditor:
 
         # ── Description ───────────────────────────────────────────────────────
         self.short_description = incident.get("short_description", "")
-        self.description       = incident.get("description", "")
-        self.category          = incident.get("category", "")
-        self.subcategory       = incident.get("subcategory", "") or ""
-
-        # ── Priority / impact / urgency ───────────────────────────────────────
-        self.impact   = incident.get("impact", "")
-        self.urgency  = incident.get("urgency", "")
-        self.severity = incident.get("severity", "")
 
         # ── State / pending ───────────────────────────────────────────────────
-        self.state          = incident.get("state", "")
-        self.incident_state = incident.get("incident_state", "")
-        self.hold_reason    = incident.get("hold_reason", "")
-        self.active         = incident.get("active", "true")
+        self.hold_reason = incident.get("hold_reason", "")
 
         # ── Reassignment ──────────────────────────────────────────────────────
         self.reassignment_count = int(incident.get("reassignment_count", 0) or 0)
-        self.assigned_to        = incident.get("assigned_to", "")
 
         # ── Resolution ────────────────────────────────────────────────────────
         self.close_notes = incident.get("close_notes", "")
-        self.close_code  = incident.get("close_code",  "") or ""
 
         # ── Reopen ────────────────────────────────────────────────────────────
         self.reopen_count  = int(incident.get("reopen_count", 0) or 0)
-        self.reopened_by   = incident.get("reopened_by",   "")
         self.reopened_time = incident.get("reopened_time", "")
 
         # ── KBA ───────────────────────────────────────────────────────────────
@@ -168,10 +89,10 @@ class Auditor:
 
         # ── Parsed work note entries (for timestamp-based checks) ─────────────
         self.work_notes = self._parse_work_note_entries(wn_raw)
-        self.comments   = []
 
         # ── LLM ───────────────────────────────────────────────────────────────
         self.llm = LLM()
+        self._contact_metrics_cache = None  # Cache for LLM contact metrics call
 
     # ─────────────────────────────────────────────────────────────────────────
     # Internal parser
@@ -208,13 +129,6 @@ class Auditor:
     # ─────────────────────────────────────────────────────────────────────────
     # Audit methods — return "Yes" / "No" / "NA" only
     # ─────────────────────────────────────────────────────────────────────────
-
-    def responsewithinSLA(self) -> str:
-        """
-        Was the ticket resolved within SLA?
-        Source : made_sla field
-        """
-        return "Yes" if str(self.made_sla).lower() == "true" else "No"
 
     def short_desc_quality(self) -> str:
         """
@@ -262,36 +176,16 @@ class Auditor:
     def check_user_contact(self) -> str:
         """
         Did the associate contact the user for additional information?
-        Source : work_notes_text keyword scan + outbound/inbound emails
-
-        Logic:
-            No contact found              → NA
-            Contact found + user replied  → Yes
-            Contact found + user absent:
-                3+ attempts               → Yes  (3-strike followed)
-                < 3 attempts              → No
+        Source : LLM analysis on work_notes + close_notes + reopen info
         """
-        wn_text = self.work_notes_text
-
-        contact_in_notes  = any(kw in wn_text for kw in CONTACT_KEYWORDS)
-        outbound_emails   = [e for e in self.emails if str(e.get("direction", "")).lower() == "outbound"]
-        contact_made      = contact_in_notes or bool(outbound_emails)
-
-        if not contact_made:
-            return "NA"
-
-        inbound_emails = [e for e in self.emails if str(e.get("direction", "")).lower() == "inbound"]
-        user_available = any(kw in wn_text for kw in USER_AVAILABLE_KEYWORDS) or bool(inbound_emails)
-
-        if user_available:
-            return "Yes"
-
-        # Count attempts — take the highest signal
-        strike_count   = sum(1 for kw in STRIKE_KEYWORDS if kw in wn_text)
-        entry_attempts = sum(1 for e in self.work_notes if any(kw in e.get("value", "").lower() for kw in CONTACT_KEYWORDS))
-        final_count    = max(strike_count, entry_attempts, len(outbound_emails))
-
-        return "Yes" if final_count >= 3 else "No"
+        if self._contact_metrics_cache is None:
+            self._contact_metrics_cache = self.llm.contact_metrics_analyser(
+                work_notes=self.work_notes,
+                close_notes=self.close_notes,
+                reopen_count=self.reopen_count,
+                reopened_time=self.reopened_time,
+            )
+        return self._contact_metrics_cache.get("user_contact", "NA")
 
     def check_pending_status(self) -> str:
         """
@@ -398,98 +292,30 @@ class Auditor:
     def check_user_confirmation_before_resolve(self) -> str:
         """
         Did the associate take user confirmation before resolving?
-        Source : close_notes + work_notes + emails (all filtered to before resolved_at)
-
-        Logic:
-            Confirmation evidence found       → Yes
-            User unavailable + 3+ attempts   → Yes  (3-strike followed)
-            User unavailable + < 3 attempts  → No
-            No evidence at all               → NA
+        Source : LLM analysis on work_notes + close_notes + reopen info
         """
-        resolved_dt = _parse_dt(self.resolved_at)
-
-        def before_resolve(ts: str) -> bool:
-            if not resolved_dt or not ts:
-                return True
-            dt = _parse_dt(ts)
-            return dt <= resolved_dt if dt else True
-
-        # 1. Quick check on close_notes
-        if any(kw in self.close_notes.lower() for kw in CONFIRMATION_KEYWORDS):
-            return "Yes"
-
-        # 2. Scan work notes before resolved_at
-        confirmed      = False
-        unavailable    = False
-        attempt_count  = 0
-
-        for entry in self.work_notes:
-            value   = entry.get("value", "").lower()
-            created = entry.get("sys_created_on", "")
-
-            if not before_resolve(created):
-                continue
-
-            if any(kw in value for kw in CONFIRMATION_KEYWORDS):
-                confirmed = True
-                break
-            if any(kw in value for kw in USER_UNAVAILABLE_KEYWORDS):
-                unavailable = True
-            if any(kw in value for kw in CONTACT_KEYWORDS):
-                attempt_count += 1
-
-        if confirmed:
-            return "Yes"
-
-        # 3. Inbound email before resolve = user replied
-        if any(
-            str(e.get("direction", "")).lower() == "inbound" and before_resolve(e.get("sys_created_on", ""))
-            for e in self.emails
-        ):
-            return "Yes"
-
-        # 4. 3-strike check
-        email_attempts  = sum(1 for e in self.emails if str(e.get("direction", "")).lower() == "outbound" and before_resolve(e.get("sys_created_on", "")))
-        final_attempts  = max(attempt_count, email_attempts)
-
-        if unavailable or email_attempts > 0:
-            return "Yes" if final_attempts >= 3 else "No"
-
-        return "NA"
+        if self._contact_metrics_cache is None:
+            self._contact_metrics_cache = self.llm.contact_metrics_analyser(
+                work_notes=self.work_notes,
+                close_notes=self.close_notes,
+                reopen_count=self.reopen_count,
+                reopened_time=self.reopened_time,
+            )
+        return self._contact_metrics_cache.get("user_confirmation", "NA")
 
     def check_reopened_and_user_connect(self) -> str:
         """
         Was the ticket re-opened? If yes, did the associate connect with the user?
-        Source : reopen_count field + work_notes and emails after reopened_time
-
-        Returns NA if ticket was never reopened.
+        Source : LLM analysis on work_notes + close_notes + reopen info
         """
-        if self.reopen_count == 0:
-            return "NA"
-
-        reopen_dt = _parse_dt(self.reopened_time)
-
-        def after_reopen(ts: str) -> bool:
-            if not reopen_dt or not ts:
-                return True
-            dt = _parse_dt(ts)
-            return dt > reopen_dt if dt else True
-
-        # Check work notes after reopen
-        contact_in_notes = any(
-            any(kw in entry.get("value", "").lower() for kw in CONTACT_KEYWORDS)
-            for entry in self.work_notes
-            if after_reopen(entry.get("sys_created_on", ""))
-        )
-
-        # Check emails after reopen
-        contact_via_email = any(
-            str(e.get("direction", "")).lower() in ("outbound", "inbound")
-            and after_reopen(e.get("sys_created_on", ""))
-            for e in self.emails
-        )
-
-        return "Yes" if (contact_in_notes or contact_via_email) else "No"
+        if self._contact_metrics_cache is None:
+            self._contact_metrics_cache = self.llm.contact_metrics_analyser(
+                work_notes=self.work_notes,
+                close_notes=self.close_notes,
+                reopen_count=self.reopen_count,
+                reopened_time=self.reopened_time,
+            )
+        return self._contact_metrics_cache.get("reopened_user_connect", "NA")
 
     def check_kba_education(self) -> str:
         """
@@ -559,9 +385,8 @@ class Auditor:
             "resolved_by"              : self.resolved_by,
 
             # Scoring columns
-            "response_sla_met"         : self.check_response_sla(),
-            "resolution_sla_met"       : self.check_resolution_sla(),
-            #"response_within_sla"      : self.responsewithinSLA(),
+            "response_within_sla"      : self.check_response_sla(),
+            "resolution_sla"           : self.check_resolution_sla(),
             "short_desc_quality"       : self.short_desc_quality(),
             "priority_reassessed"      : self.is_priority_reassessed(),
             "incident_reassigned"      : self.is_incident_reassigned(),

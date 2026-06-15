@@ -1,3 +1,4 @@
+import json
 import os
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -37,7 +38,7 @@ class LLM:
                     }
                 ],
                 temperature=0,
-                max_tokens=20
+                max_tokens=500
             )
 
             content = response.choices[0].message.content
@@ -138,13 +139,13 @@ Answer:
         prompt = f"""
 Answer ONLY with Yes or No.
 
-Resolution Notes:
+Resolution Notes (close_notes):
 {close_notes}
 
 Work Notes:
 {work_notes_text}
 
-You are reviewing service desk resolution notes.
+You are reviewing service desk resolution notes(close_notes).
 
 Be LENIENT.
 
@@ -187,3 +188,118 @@ Answer:
         raw = self._call(prompt)
 
         return self._to_yes_no(raw)
+
+    # ==========================================================
+    # Contact Metrics Analyser
+    # ==========================================================
+
+    def contact_metrics_analyser(
+        self,
+        work_notes: list,
+        close_notes: str,
+        reopen_count: int,
+        reopened_time: str,
+    ) -> dict:
+        """
+        Analyse 3 contact-related metrics from work notes in a single LLM call.
+
+        Metrics evaluated:
+            1. user_contact             — Did the associate contact the user?
+            2. user_confirmation        — Did the associate take user confirmation before resolving?
+            3. reopened_user_connect    — If ticket was reopened, did associate reconnect with user?
+
+        Args:
+            work_notes    : list of work note entry dicts { sys_created_on, value }
+            close_notes   : close_notes field from incident
+            reopen_count  : reopen_count field from incident
+            reopened_time : reopened_time field from incident
+
+        Returns:
+            {
+                "user_contact"          : "Yes" / "No" / "NA",
+                "user_confirmation"     : "Yes" / "No" / "NA",
+                "reopened_user_connect" : "Yes" / "No" / "NA",
+            }
+        """
+
+        # Build work notes text
+        work_notes_text = "\n".join(
+            f"[{entry.get('sys_created_on', '')}] {entry.get('value', '').strip()}"
+            for entry in work_notes
+            if isinstance(entry, dict) and entry.get("value", "").strip()
+        ) if work_notes else "No work notes available."
+
+        # Build reopen context
+        reopen_context = (
+            f"The ticket was reopened {reopen_count} time(s). Reopen time: {reopened_time}."
+            if reopen_count > 0
+            else "The ticket was never reopened."
+        )
+
+        prompt = f"""You are a service desk quality auditor reviewing an IT incident ticket.
+
+Work Notes (chronological):
+{work_notes_text}
+
+Resolution Notes (close_notes):
+{close_notes or "Not provided."}
+
+Reopen Info:
+{reopen_context}
+
+Evaluate the following 3 metrics and respond ONLY in the JSON format shown below.
+
+METRIC 1 — user_contact:
+Did the associate contact the user during the ticket lifecycle for any reason?
+Contact includes: phone call, email, Teams/Slack message, WhatsApp, or any documented communication attempt.
+- Yes  : associate clearly contacted or attempted to contact the user
+- No   : no evidence of any contact attempt
+- NA   : not applicable (e.g. ticket was auto-generated or no user involvement needed)
+
+METRIC 2 — user_confirmation:
+Did the associate get confirmation from the user before resolving/closing the ticket?
+- Yes  : user confirmed issue resolved, tested fix, or 3+ contact attempts were made when user was unavailable
+- No   : ticket closed without user confirmation and without following 3-strike process
+- NA   : no evidence either way
+
+METRIC 3 — reopened_user_connect:
+If the ticket was reopened, did the associate reconnect with the user after reopening?
+- Yes  : evidence of user contact after the reopen
+- No   : ticket was reopened but no user contact found after reopen
+- NA   : ticket was never reopened
+
+Rules:
+- Base your answers ONLY on what is written in the notes above.
+- Do not assume anything that is not documented.
+- For user_contact: even one documented attempt counts as Yes.
+- For user_confirmation: if user was unreachable and 3+ attempts are documented, answer Yes.
+
+Respond ONLY with this exact JSON, no explanation, no markdown:
+{{"user_contact": "Yes/No/NA", "user_confirmation": "Yes/No/NA", "reopened_user_connect": "Yes/No/NA"}}"""
+
+        try:
+            raw = self._call(prompt)
+
+            # Strip any accidental markdown
+            raw = raw.strip().replace("```json", "").replace("```", "").strip()
+            parsed = json.loads(raw)
+
+            def clean(val):
+                v = str(val).strip()
+                if v.lower().startswith("yes"): return "Yes"
+                if v.lower().startswith("no"):  return "No"
+                return "NA"
+
+            return {
+                "user_contact"          : clean(parsed.get("user_contact",          "NA")),
+                "user_confirmation"     : clean(parsed.get("user_confirmation",      "NA")),
+                "reopened_user_connect" : clean(parsed.get("reopened_user_connect",  "NA")),
+            }
+
+        except Exception as e:
+            print(f"  LLM error [contact_metrics]: {e}")
+            return {
+                "user_contact"          : "NA",
+                "user_confirmation"     : "NA",
+                "reopened_user_connect" : "NA",
+            }
