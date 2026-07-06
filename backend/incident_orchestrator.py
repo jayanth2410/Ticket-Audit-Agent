@@ -29,6 +29,8 @@ class IncidentOrchestrator:
         self.db_config = db_config
         self.fetcher = fetcher
         self.storage = IncidentStorage(db_config)
+        # Use the same log callback as the fetcher for consistent SSE streaming
+        self._log = fetcher._log
 
     def _parse_datetime(self, date_string: str) -> datetime:
         """Parse 'YYYY-MM-DD' to datetime at start of day"""
@@ -108,15 +110,15 @@ class IncidentOrchestrator:
                 'db_data': dict                       # Existing DB data by sys_id
             }
         """
-        print(f"\n📊 Checking database for incidents in range {start_date} to {end_date}...")
+        self._log(f"Checking database for incidents in range {start_date} to {end_date}...")
         
         # Step 1: Get what we have in the database
         db_result = self.get_incidents_in_database(start_date, end_date)
         db_incidents = db_result['incidents']
-        print(f"✅ Found {db_result['count']} incidents in database for this date range")
+        self._log(f"Found {db_result['count']} incidents in database cache")
         
         # Step 2: Fetch incident list from ServiceNow (without enrichment yet)
-        print(f"🔍 Fetching incident list from ServiceNow for {start_date} to {end_date}...")
+        self._log(f"Querying ServiceNow for incident list {start_date} to {end_date}...")
         
         url = f"{self.fetcher.instance_url}/api/now/table/incident"
         start_datetime = f"{start_date} 00:00:00"
@@ -153,7 +155,7 @@ class IncidentOrchestrator:
                 sn_incidents = resp.json().get('result', [])
         
         except Exception as e:
-            print(f"❌ Error fetching incident list from ServiceNow: {e}")
+            self._log(f"Error fetching incident list from ServiceNow: {e}")
             return {
                 'to_fetch': [],
                 'new_count': 0,
@@ -163,7 +165,7 @@ class IncidentOrchestrator:
                 'db_data': db_incidents
             }
         
-        print(f"📋 Found {len(sn_incidents)} incidents in ServiceNow for this date range")
+        self._log(f"Found {len(sn_incidents)} incidents in ServiceNow for this date range")
         
         # Step 3: Compare and identify which to fetch
         to_fetch = []
@@ -177,36 +179,32 @@ class IncidentOrchestrator:
             sn_updated_on = sn_incident.get('sys_updated_on', '')
             
             if sys_id not in db_incidents:
-                # NEW incident
                 to_fetch.append(number)
                 new_count += 1
-                print(f"  📌 NEW: {number}")
             else:
-                # Incident exists in DB - check if it was updated
                 db_incident = db_incidents[sys_id]
                 db_updated_on = db_incident.sys_updated_on
-                
-                # Parse datetime for comparison
                 try:
                     sn_dt = datetime.strptime(sn_updated_on, "%Y-%m-%d %H:%M:%S")
                     db_dt = db_updated_on if isinstance(db_updated_on, datetime) else datetime.now()
-                    
                     if sn_dt > db_dt:
-                        # MODIFIED incident
                         to_fetch.append(number)
                         modified_count += 1
-                        print(f"  🔄 MODIFIED: {number}")
                     else:
                         # UNCHANGED
                         unchanged_count += 1
-                        print(f"  ✓ UNCHANGED: {number}")
                 
                 except Exception as e:
-                    print(f"  ⚠️ Error comparing timestamps for {number}: {e}")
-                    # Default to re-fetch if we can't compare
+                    self._log(f"Warning: timestamp compare failed for {number}: {e}")
                     to_fetch.append(number)
                     modified_count += 1
         
+        self._log(
+            f"DB comparison done — "
+            f"total_in_range:{len(sn_incidents)}  "
+            f"new:{new_count}  modified:{modified_count}  unchanged:{unchanged_count}"
+        )
+
         return {
             'to_fetch': to_fetch,
             'new_count': new_count,
@@ -221,7 +219,8 @@ class IncidentOrchestrator:
         start_date: str,
         end_date: str,
         ticket_type: str = "incident",
-        resolver_group: str = None
+        resolver_group: str = None,
+        cancel_check=None
     ) -> Dict[str, Any]:
         """
         Orchestrate the complete fetch, enrich, and store workflow
@@ -239,42 +238,70 @@ class IncidentOrchestrator:
                 'storage_results': {...}    # From store_incidents
             }
         """
-        print(f"\n{'='*80}")
-        print(f"🚀 INCIDENT ORCHESTRATION: {start_date} to {end_date}")
-        print(f"{'='*80}")
+        self._log(f"Orchestration starting: {start_date} to {end_date}")
         
         # Step 1: Analyze what needs fetching
         analysis = self.identify_incidents_to_fetch(
             start_date, end_date, ticket_type, resolver_group
         )
+
+        if cancel_check and cancel_check():
+            return {
+                'analysis': analysis,
+                'fetched_count': 0,
+                'storage_results': {'success': 0, 'failed': 0, 'total': 0, 'errors': []},
+                'cancelled': True,
+            }
         
-        print(f"\n📊 SUMMARY:")
-        print(f"  New incidents: {analysis['new_count']}")
-        print(f"  Modified incidents: {analysis['modified_count']}")
-        print(f"  Unchanged incidents: {analysis['unchanged_count']}")
-        print(f"  Total to fetch: {len(analysis['to_fetch'])}")
+        self._log(
+            f"DB analysis — New: {analysis['new_count']}  "
+            f"Modified: {analysis['modified_count']}  "
+            f"Unchanged: {analysis['unchanged_count']}  "
+            f"Total in range: {analysis['total_in_range']}"
+        )
         
-        # Step 2: Fetch from ServiceNow (only those that need it)
+        # Step 2: Fetch + enrich from ServiceNow (only new/modified)
         if analysis['to_fetch']:
-            print(f"\n🔄 Fetching {len(analysis['to_fetch'])} incidents from ServiceNow...")
+            self._log(f"Fetching and enriching {len(analysis['to_fetch'])} incidents from ServiceNow...")
             enriched_incidents = self.fetcher.fetch_incidents_in_range(
                 ticket_type=ticket_type,
                 start_date=start_date,
                 end_date=end_date,
-                resolver_group=resolver_group
+                resolver_group=resolver_group,
+                cancel_check=cancel_check,
             )
+
+            if cancel_check and cancel_check():
+                return {
+                    'analysis': analysis,
+                    'fetched_count': 0,
+                    'storage_results': {'success': 0, 'failed': 0, 'total': 0, 'errors': []},
+                    'cancelled': True,
+                }
             
-            # Filter to only incidents we need (in case we fetched extras)
             to_fetch_set = set(analysis['to_fetch'])
             filtered_incidents = [inc for inc in enriched_incidents if inc.get('number') in to_fetch_set]
-            print(f"✅ Fetched and enriched {len(filtered_incidents)} incidents")
+            self._log(f"Fetched and enriched {len(filtered_incidents)} incidents")
         else:
-            print(f"\n✓ All incidents in date range are already in database and unchanged")
+            self._log("All incidents in date range are already cached and unchanged")
             filtered_incidents = []
+
+        if cancel_check and cancel_check():
+            return {
+                'analysis': analysis,
+                'fetched_count': 0,
+                'storage_results': {
+                    'success': 0,
+                    'failed': 0,
+                    'total': 0,
+                    'errors': []
+                },
+                'cancelled': True,
+            }
         
         # Step 3: Store in database
         if filtered_incidents:
-            print(f"\n💾 Storing {len(filtered_incidents)} incidents in database...")
+            self._log(f"Storing {len(filtered_incidents)} incidents in database...")
             storage_results = self.storage.store_incidents(filtered_incidents)
         else:
             storage_results = {
@@ -285,21 +312,18 @@ class IncidentOrchestrator:
             }
         
         # Step 4: Final summary
-        print(f"\n{'='*80}")
-        print(f"✅ ORCHESTRATION COMPLETE")
-        print(f"{'='*80}")
-        print(f"Database incidents for range: {analysis['total_in_range']}")
-        print(f"Already in DB (unchanged): {analysis['unchanged_count']}")
-        print(f"Fetched from API: {len(filtered_incidents)}")
-        print(f"Successfully stored: {storage_results['success']}")
-        if storage_results['failed'] > 0:
-            print(f"❌ Failed to store: {storage_results['failed']}")
-        print(f"{'='*80}\n")
+        self._log(
+            f"Orchestration complete — "
+            f"fetched:{len(filtered_incidents)}  "
+            f"stored:{storage_results['success']}  "
+            f"unchanged:{analysis['unchanged_count']}"
+        )
         
         return {
             'analysis': analysis,
             'fetched_count': len(filtered_incidents),
-            'storage_results': storage_results
+            'storage_results': storage_results,
+            'cancelled': False,
         }
 
     def _fallback_request(self, url: str, params: dict):

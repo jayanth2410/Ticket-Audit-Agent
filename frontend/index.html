@@ -1,82 +1,79 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="light">
+<html lang="en">
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Ticket Audit — Quality Intelligence</title>
+  <title>AuditIQ — Ticket Quality Intelligence</title>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet"/>
   <link rel="stylesheet" href="styles.css"/>
 </head>
 <body>
 
 <div class="shell">
 
-  <!-- ══ Sidebar ══════════════════════════════════════════════════════════ -->
-  <aside class="sidebar">
-    <div class="sidebar-logo">
+  <!-- ══ App Header ══════════════════════════════════════════════════════ -->
+  <header class="app-header">
+    <div class="app-header-left">
       <div class="logo-mark">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
           <path d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </div>
       <div class="logo-text">
         <span class="logo-title">AuditIQ</span>
+        <span class="logo-sep">|</span>
         <span class="logo-sub">Ticket Quality Intelligence</span>
       </div>
     </div>
-
-    <nav class="sidebar-nav">
-      <a href="#" class="nav-item active" data-view="audit">
-        <svg class="nav-icon" viewBox="0 0 24 24" fill="none"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        <span>Run Audit</span>
-      </a>
-      <a href="#" class="nav-item" data-view="results">
-        <svg class="nav-icon" viewBox="0 0 24 24" fill="none"><path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        <span>Results</span>
-        <span class="nav-badge hidden" id="nav-badge">0</span>
-      </a>
-      <a href="#" class="nav-item" data-view="metrics">
-        <svg class="nav-icon" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.75"/><path d="M12 6v6l4 2" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
-        <span>Metric Analysis</span>
-      </a>
-      <a href="#" class="nav-item" data-view="tickets">
-        <svg class="nav-icon" viewBox="0 0 24 24" fill="none"><path d="M4 6h16M4 10h16M4 14h8M4 18h8" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
-        <span>Tickets</span>
-      </a>
-    </nav>
-
-    <div class="sidebar-footer">
-      <button class="theme-toggle" id="theme-toggle" title="Toggle theme">
-        <svg class="icon-sun" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="1.75"/><path d="M12 2v2M12 20v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M2 12h2M20 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
-        <svg class="icon-moon" viewBox="0 0 24 24" fill="none"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        <span id="theme-label">Light Mode</span>
-      </button>
+    <div class="app-header-right">
+      <div class="job-status-pill" id="job-pill" style="display:none">
+        <span class="job-dot"></span>
+        <span id="job-pill-text">Running…</span>
+      </div>
       <div class="server-status" id="server-status">
         <span class="status-dot"></span>
         <span id="server-status-text">Connecting…</span>
       </div>
     </div>
-  </aside>
+  </header>
 
-  <!-- ══ Main ══════════════════════════════════════════════════════════════ -->
+  <!-- ══ Main content ═════════════════════════════════════════════════════ -->
   <div class="main">
 
-    <!-- Top bar -->
-    <header class="topbar">
-      <div class="topbar-left">
-        <h1 class="page-title" id="page-title">Run Audit</h1>
-        <div class="breadcrumb" id="breadcrumb">Configure and launch a new audit</div>
+    <!-- ── Horizontal Tab Bar ────────────────────────────────────────── -->
+    <nav class="tab-bar">
+      <div class="tab-bar-inner">
+        <a class="tab-item active" data-view="audit">
+          <svg class="tab-icon" viewBox="0 0 24 24" fill="none">
+            <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Run Audit
+        </a>
+        <a class="tab-item" data-view="results">
+          <svg class="tab-icon" viewBox="0 0 24 24" fill="none">
+            <path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Results
+          <span class="tab-badge hidden" id="nav-badge">0</span>
+        </a>
+        <a class="tab-item" data-view="metrics">
+          <svg class="tab-icon" viewBox="0 0 24 24" fill="none">
+            <path d="M11 3.055A9.001 9.001 0 1020.945 13H11V3.055z" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M20.488 9H15V3.512A9.025 9.025 0 0120.488 9z" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Metric Analysis
+        </a>
+        <a class="tab-item" data-view="tickets">
+          <svg class="tab-icon" viewBox="0 0 24 24" fill="none">
+            <path d="M4 6h16M4 10h16M4 14h8M4 18h8" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/>
+          </svg>
+          Tickets
+        </a>
       </div>
-      <div class="topbar-right">
-        <div class="job-status-pill" id="job-pill" style="display:none">
-          <span class="job-dot"></span>
-          <span id="job-pill-text">Running…</span>
-        </div>
-      </div>
-    </header>
+    </nav>
 
-    <!-- ── VIEW: Audit ────────────────────────────────────────────────── -->
+    <!-- ── VIEW: Run Audit ───────────────────────────────────────────── -->
     <div class="view active" id="view-audit">
       <div class="view-inner">
 
@@ -85,7 +82,7 @@
           <div class="config-card-head">
             <div>
               <div class="config-title">Audit Configuration</div>
-              <div class="config-sub">Set the date range, resolver group and pass threshold</div>
+              <div class="config-sub">Set the date range, resolver group and quality threshold to begin analysis</div>
             </div>
           </div>
           <div class="config-body">
@@ -93,28 +90,38 @@
               <div class="form-group">
                 <label class="form-label">Start Date <span class="req">*</span></label>
                 <div class="input-wrap">
-                  <svg class="input-icon" viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="18" rx="2" stroke="currentColor" stroke-width="1.75"/><path d="M16 2v4M8 2v4M3 10h18" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
+                  <svg class="input-icon" viewBox="0 0 24 24" fill="none">
+                    <rect x="3" y="4" width="18" height="18" rx="2" stroke="currentColor" stroke-width="1.75"/>
+                    <path d="M16 2v4M8 2v4M3 10h18" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/>
+                  </svg>
                   <input type="date" id="start-date" class="form-input"/>
                 </div>
               </div>
               <div class="form-group">
                 <label class="form-label">End Date <span class="req">*</span></label>
                 <div class="input-wrap">
-                  <svg class="input-icon" viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="18" rx="2" stroke="currentColor" stroke-width="1.75"/><path d="M16 2v4M8 2v4M3 10h18" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
+                  <svg class="input-icon" viewBox="0 0 24 24" fill="none">
+                    <rect x="3" y="4" width="18" height="18" rx="2" stroke="currentColor" stroke-width="1.75"/>
+                    <path d="M16 2v4M8 2v4M3 10h18" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/>
+                  </svg>
                   <input type="date" id="end-date" class="form-input"/>
                 </div>
               </div>
               <div class="form-group">
-                <label class="form-label">Resolver Group <span class="form-opt">optional</span></label>
+                <label class="form-label">Resolver Group <span class="form-opt">(optional)</span></label>
                 <div class="input-wrap">
-                  <svg class="input-icon" viewBox="0 0 24 24" fill="none"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75M9 7a4 4 0 110 8 4 4 0 010-8z" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
+                  <svg class="input-icon" viewBox="0 0 24 24" fill="none">
+                    <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75M9 7a4 4 0 110 8 4 4 0 010-8z" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/>
+                  </svg>
                   <input type="text" id="resolver-group" class="form-input" placeholder="e.g. TCS-INFRA-SUPPORT"/>
                 </div>
               </div>
               <div class="form-group">
                 <label class="form-label">Pass Threshold %</label>
                 <div class="input-wrap">
-                  <svg class="input-icon" viewBox="0 0 24 24" fill="none"><path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
+                  <svg class="input-icon" viewBox="0 0 24 24" fill="none">
+                    <path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
                   <input type="number" id="pass-threshold" class="form-input" min="0" max="100" step="1" value="70"/>
                 </div>
               </div>
@@ -124,109 +131,176 @@
                 <svg viewBox="0 0 24 24" fill="none"><polygon points="5,3 19,12 5,21" fill="currentColor"/></svg>
                 Start Audit
               </button>
+              <button class="btn btn-danger btn-lg" id="btn-cancel" onclick="cancelAudit()" style="display:none">
+                <svg viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                Cancel Audit
+              </button>
             </div>
           </div>
         </div>
 
-        <!-- Log terminal -->
-        <div class="terminal-card" id="terminal-card" style="display:none">
-          <div class="terminal-head">
-            <div class="terminal-dots">
-              <span class="tdot red"></span>
-              <span class="tdot yellow"></span>
-              <span class="tdot green"></span>
+        <!-- Progress Steps Card -->
+        <div class="progress-card" id="progress-card" style="display:none">
+          <div class="progress-card-head">
+            <div class="progress-card-title">
+              <svg viewBox="0 0 24 24" fill="none">
+                <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.75"/>
+                <path d="M12 6v6l4 2" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/>
+              </svg>
+              Audit Progress
             </div>
-            <span class="terminal-title">Audit Log</span>
-            <div class="terminal-progress" id="terminal-progress"></div>
+            <div class="progress-overall-wrap">
+              <span class="progress-overall-label">Overall</span>
+              <div class="progress-overall-bar-bg">
+                <div class="progress-overall-bar" id="progress-overall-bar" style="width:0%"></div>
+              </div>
+              <span class="progress-overall-pct" id="progress-overall-pct">0%</span>
+            </div>
           </div>
-          <div class="terminal-body" id="log-terminal"></div>
+          <div class="progress-steps-body">
+
+            <div class="step-row" id="step-connect">
+              <div class="step-icon-wrap">
+                <div class="step-spinner"></div>
+                <svg viewBox="0 0 24 24" fill="none"><path d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </div>
+              <div class="step-content">
+                <div class="step-title">Connecting to Instance</div>
+                <div class="step-desc" id="step-connect-desc">Establishing connection to ServiceNow…</div>
+              </div>
+              <div class="step-check">✓</div>
+            </div>
+
+            <div class="step-row" id="step-fetch">
+              <div class="step-icon-wrap">
+                <div class="step-spinner"></div>
+                <svg viewBox="0 0 24 24" fill="none"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1M16 11l-4 4m0 0l-4-4m4 4V3" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </div>
+              <div class="step-content">
+                <div class="step-title">Fetching Incidents</div>
+                <div class="step-desc" id="step-fetch-desc">Retrieving incidents from the selected date range…</div>
+                <div class="step-sub-progress">
+                  <div class="step-sub-bar-bg"><div class="step-sub-bar" id="step-fetch-bar" style="width:0%"></div></div>
+                  <div class="step-sub-label" id="step-fetch-label"></div>
+                </div>
+              </div>
+              <div class="step-check">✓</div>
+            </div>
+
+            <div class="step-row" id="step-db">
+              <div class="step-icon-wrap">
+                <div class="step-spinner"></div>
+                <svg viewBox="0 0 24 24" fill="none"><ellipse cx="12" cy="5" rx="9" ry="3" stroke="currentColor" stroke-width="1.75"/><path d="M3 5v14c0 1.657 4.03 3 9 3s9-1.343 9-3V5" stroke="currentColor" stroke-width="1.75"/><path d="M3 12c0 1.657 4.03 3 9 3s9-1.343 9-3" stroke="currentColor" stroke-width="1.75"/></svg>
+              </div>
+              <div class="step-content">
+                <div class="step-title">Checking Database</div>
+                <div class="step-desc" id="step-db-desc">Comparing with cached records, identifying changes…</div>
+              </div>
+              <div class="step-check">✓</div>
+            </div>
+
+            <div class="step-row" id="step-enrich">
+              <div class="step-icon-wrap">
+                <div class="step-spinner"></div>
+                <svg viewBox="0 0 24 24" fill="none"><path d="M13 10V3L4 14h7v7l9-11h-7z" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </div>
+              <div class="step-content">
+                <div class="step-title">Enriching Data</div>
+                <div class="step-desc" id="step-enrich-desc">Fetching SLA data, audit history and work notes per ticket…</div>
+                <div class="step-sub-progress">
+                  <div class="step-sub-bar-bg"><div class="step-sub-bar" id="step-enrich-bar" style="width:0%"></div></div>
+                  <div class="step-sub-label" id="step-enrich-label"></div>
+                </div>
+              </div>
+              <div class="step-check">✓</div>
+            </div>
+
+            <div class="step-row" id="step-audit">
+              <div class="step-icon-wrap">
+                <div class="step-spinner"></div>
+                <svg viewBox="0 0 24 24" fill="none"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </div>
+              <div class="step-content">
+                <div class="step-title">Auditing Tickets</div>
+                <div class="step-desc" id="step-audit-desc">Running 12 quality checks on each incident…</div>
+                <div class="step-sub-progress">
+                  <div class="step-sub-bar-bg"><div class="step-sub-bar" id="step-audit-bar" style="width:0%"></div></div>
+                  <div class="step-sub-label" id="step-audit-label"></div>
+                </div>
+              </div>
+              <div class="step-check">✓</div>
+            </div>
+
+            <div class="step-row" id="step-report">
+              <div class="step-icon-wrap">
+                <div class="step-spinner"></div>
+                <svg viewBox="0 0 24 24" fill="none"><path d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </div>
+              <div class="step-content">
+                <div class="step-title">Generating Report</div>
+                <div class="step-desc" id="step-report-desc">Building Excel report and computing summary…</div>
+              </div>
+              <div class="step-check">✓</div>
+            </div>
+
+          </div>
         </div>
 
         <!-- Empty state -->
         <div class="empty-state" id="empty-state">
           <div class="empty-graphic">
-            <svg viewBox="0 0 120 120" fill="none">
-              <circle cx="60" cy="60" r="50" stroke="var(--border)" stroke-width="2" stroke-dasharray="8 4"/>
-              <path d="M45 60l10 10 20-20" stroke="var(--accent)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+            <svg viewBox="0 0 160 160" fill="none">
+              <circle cx="80" cy="80" r="64" fill="#f0f2ff"/>
+              <circle cx="80" cy="80" r="48" fill="#e0e7ff"/>
+              <rect x="56" y="52" width="48" height="56" rx="6" fill="white" stroke="#c7d2fe" stroke-width="1.5"/>
+              <path d="M64 68h32M64 76h32M64 84h20" stroke="#a5b4fc" stroke-width="2" stroke-linecap="round"/>
+              <circle cx="100" cy="104" r="16" fill="#4f46e5"/>
+              <path d="M94 104l4 4 8-8" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </div>
           <div class="empty-title">Ready to Audit</div>
-          <div class="empty-desc">Configure your date range and click <strong>Start Audit</strong> to begin quality analysis</div>
+          <div class="empty-desc">Configure your date range above and click <strong>Start Audit</strong> to begin quality analysis on your ServiceNow incidents.</div>
         </div>
 
       </div>
-    </div>
+    </div><!-- /view-audit -->
 
-    <!-- ── VIEW: Results ──────────────────────────────────────────────── -->
+    <!-- ── VIEW: Results ─────────────────────────────────────────────── -->
     <div class="view" id="view-results">
       <div class="view-inner">
-
-        <!-- KPI strip -->
-        <div class="kpi-strip" id="kpi-strip">
+        <div class="kpi-strip">
           <div class="kpi-card kpi-blue">
-            <div class="kpi-icon">
-              <svg viewBox="0 0 24 24" fill="none"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
-            </div>
-            <div class="kpi-body">
-              <div class="kpi-label">Total Audited</div>
-              <div class="kpi-value" id="s-total">—</div>
-            </div>
+            <div class="kpi-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg></div>
+            <div class="kpi-body"><div class="kpi-label">Total Audited</div><div class="kpi-value" id="s-total">—</div></div>
           </div>
           <div class="kpi-card kpi-green">
-            <div class="kpi-icon">
-              <svg viewBox="0 0 24 24" fill="none"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
-            </div>
-            <div class="kpi-body">
-              <div class="kpi-label">Passed</div>
-              <div class="kpi-value" id="s-passed">—</div>
-            </div>
+            <div class="kpi-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg></div>
+            <div class="kpi-body"><div class="kpi-label">Passed</div><div class="kpi-value" id="s-passed">—</div></div>
           </div>
           <div class="kpi-card kpi-red">
-            <div class="kpi-icon">
-              <svg viewBox="0 0 24 24" fill="none"><path d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
-            </div>
-            <div class="kpi-body">
-              <div class="kpi-label">Failed</div>
-              <div class="kpi-value" id="s-failed">—</div>
-            </div>
+            <div class="kpi-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg></div>
+            <div class="kpi-body"><div class="kpi-label">Failed</div><div class="kpi-value" id="s-failed">—</div></div>
           </div>
           <div class="kpi-card kpi-amber">
-            <div class="kpi-icon">
-              <svg viewBox="0 0 24 24" fill="none"><path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
-            </div>
-            <div class="kpi-body">
-              <div class="kpi-label">Pass Rate</div>
-              <div class="kpi-value" id="s-pct">—</div>
-            </div>
+            <div class="kpi-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg></div>
+            <div class="kpi-body"><div class="kpi-label">Pass Rate</div><div class="kpi-value" id="s-pct">—</div></div>
           </div>
           <div class="kpi-card kpi-purple">
-            <div class="kpi-icon">
-              <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.75"/><path d="M12 8v4l3 3" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
-            </div>
-            <div class="kpi-body">
-              <div class="kpi-label">Avg Score</div>
-              <div class="kpi-value" id="s-avg">—</div>
-            </div>
+            <div class="kpi-icon"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.75"/><path d="M12 8v4l3 3" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg></div>
+            <div class="kpi-body"><div class="kpi-label">Avg Score</div><div class="kpi-value" id="s-avg">—</div></div>
           </div>
         </div>
 
-        <!-- Chart row -->
         <div class="chart-row">
           <div class="chart-card">
             <div class="chart-card-title">Pass / Fail Distribution</div>
             <div class="donut-wrap">
               <canvas id="donut-chart" width="200" height="200"></canvas>
-              <div class="donut-center" id="donut-center">
-                <span class="donut-pct" id="donut-pct">—</span>
-                <span class="donut-label">Pass Rate</span>
-              </div>
+              <div class="donut-center"><span class="donut-pct" id="donut-pct">—</span><span class="donut-label">Pass Rate</span></div>
             </div>
-            <div class="donut-legend">
-              <span class="legend-dot green"></span><span>Pass</span>
-              <span class="legend-dot red"></span><span>Fail</span>
-            </div>
+            <div class="donut-legend"><span class="legend-dot green"></span><span>Pass</span><span class="legend-dot red"></span><span>Fail</span></div>
           </div>
-          <div class="chart-card chart-card-wide">
+          <div class="chart-card">
             <div class="chart-card-title">Top Failing Metrics</div>
             <div class="top-fails" id="top-fails"></div>
           </div>
@@ -236,7 +310,6 @@
           </div>
         </div>
 
-        <!-- Action bar -->
         <div class="action-bar">
           <div class="action-bar-left" id="action-bar-range"></div>
           <div class="action-bar-right">
@@ -246,11 +319,10 @@
             </a>
           </div>
         </div>
-
       </div>
-    </div>
+    </div><!-- /view-results -->
 
-    <!-- ── VIEW: Metric Analysis ──────────────────────────────────────── -->
+    <!-- ── VIEW: Metrics ─────────────────────────────────────────────── -->
     <div class="view" id="view-metrics">
       <div class="view-inner">
         <div class="section-header">
@@ -268,9 +340,9 @@
           <div class="empty-placeholder">Run an audit to see metric analysis</div>
         </div>
       </div>
-    </div>
+    </div><!-- /view-metrics -->
 
-    <!-- ── VIEW: Tickets ──────────────────────────────────────────────── -->
+    <!-- ── VIEW: Tickets ─────────────────────────────────────────────── -->
     <div class="view" id="view-tickets">
       <div class="view-inner">
         <div class="section-header">
@@ -284,13 +356,12 @@
               <input type="text" id="ticket-search" class="search-input" placeholder="Search tickets…" oninput="filterTickets()"/>
             </div>
             <div class="filter-pills">
-              <button class="pill active" data-result="all" onclick="filterByResult(this,'all')">All</button>
-              <button class="pill pill-pass" data-result="PASS" onclick="filterByResult(this,'PASS')">PASS</button>
-              <button class="pill pill-fail" data-result="FAIL" onclick="filterByResult(this,'FAIL')">FAIL</button>
+              <button class="pill active" onclick="filterByResult(this,'all')">All</button>
+              <button class="pill pill-pass" onclick="filterByResult(this,'PASS')">PASS</button>
+              <button class="pill pill-fail" onclick="filterByResult(this,'FAIL')">FAIL</button>
             </div>
           </div>
         </div>
-
         <div class="ticket-table">
           <div class="ticket-table-head">
             <div class="th">Ticket</div>
@@ -306,14 +377,12 @@
           </div>
         </div>
       </div>
-    </div>
+    </div><!-- /view-tickets -->
 
-  </div>
-</div>
+  </div><!-- /main -->
+</div><!-- /shell -->
 
-<!-- ── Toast container ────────────────────────────────────────────────── -->
 <div class="toast-stack" id="toast-stack"></div>
-
 <script src="script.js"></script>
 </body>
 </html>

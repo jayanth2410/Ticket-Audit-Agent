@@ -16,7 +16,7 @@ import os
 import sys
 import json
 import logging
-import threading
+import multiprocessing as mp
 import queue
 import time
 import uuid
@@ -55,6 +55,7 @@ SN_INSTANCE  = os.getenv("SERVICENOW_INSTANCE", "")
 SN_USER      = os.getenv("SERVICENOW_USER",     "")
 SN_PASSWORD  = os.getenv("SERVICENOW_PASSWORD", "")
 TEMPLATE_PATH = str(ROOT_DIR / "Audit_Report_Template.xlsx")
+AUDITS_DIR = ROOT_DIR / "audits"
 DEFAULT_THRESHOLD = 70.0
 
 # ── Metric definitions (for scoring) ─────────────────────────────────────────
@@ -76,6 +77,15 @@ METRIC_MAX_SCORES = {
 # ── In-memory job store (for async polling) ───────────────────────────────────
 JOBS: dict = {}
 JOB_TTL    = 3600  # 1 hour
+
+AUDITS_DIR.mkdir(exist_ok=True)
+
+MP_CTX = mp.get_context("spawn")
+
+
+class JobCancelled(Exception):
+    """Raised when a running audit job is cancelled by the user."""
+    pass
 
 # ── Flask ─────────────────────────────────────────────────────────────────────
 app = Flask(__name__)
@@ -246,21 +256,109 @@ def _cleanup_old_jobs():
         job = JOBS[jid]
         if job["status"] in ("done", "error"):
             if now - job.get("finished_at", now) > JOB_TTL:
-                path = job.get("excel_path")
-                if path and os.path.exists(path):
-                    try:
-                        os.remove(path)
-                    except OSError:
-                        pass
+                for path in (job.get("excel_path"), job.get("record_path")):
+                    if path and os.path.exists(path):
+                        try:
+                            os.remove(path)
+                        except OSError:
+                            pass
                 JOBS.pop(jid, None)
 
 
+def _raise_if_cancelled(cancel_check):
+    if cancel_check():
+        raise JobCancelled("Audit cancelled by user")
+
+
+def _sync_job_state(job_id: str):
+    job = JOBS.get(job_id)
+    if not job:
+        return None
+
+    process = job.get("process")
+    if job["status"] in ("done", "error", "cancelled"):
+        return job
+
+    if process and not process.is_alive():
+        if job.get("cancel_requested"):
+            job["status"] = "cancelled"
+            job["finished_at"] = job.get("finished_at") or time.time()
+            return job
+
+        if process.exitcode == 0:
+            record_path = job.get("record_path")
+            if record_path and os.path.exists(record_path) and job.get("results") is None:
+                try:
+                    with open(record_path, "r", encoding="utf-8") as fh:
+                        payload = json.load(fh)
+                    job["results"] = payload.get("results")
+                    job["status"] = payload.get("status", "done")
+                except Exception as exc:
+                    job["status"] = "error"
+                    job["error"] = f"Failed to load audit record: {exc}"
+            else:
+                job["status"] = "done"
+            job["finished_at"] = job.get("finished_at") or time.time()
+            return job
+
+        job["status"] = "error"
+        job["error"] = job.get("error") or f"Audit process exited with code {process.exitcode}"
+        job["finished_at"] = job.get("finished_at") or time.time()
+
+    return job
+
+
+def _find_active_job_id() -> str | None:
+    active_jobs = [
+        (jid, job)
+        for jid, job in JOBS.items()
+        if job.get("status") in ("running", "cancelling") and job.get("process")
+    ]
+    if not active_jobs:
+        return None
+    active_jobs.sort(key=lambda item: item[1].get("created_at", 0), reverse=True)
+    return active_jobs[0][0]
+
+
+def _terminate_job(job_id: str):
+    job = _sync_job_state(job_id)
+    if not job:
+        return None
+
+    if job["status"] in ("done", "error", "cancelled"):
+        return job
+
+    job["cancel_requested"] = True
+    if job["status"] == "running":
+        job["status"] = "cancelling"
+
+    process = job.get("process")
+    cancel_event = job.get("cancel_event")
+    if cancel_event:
+        cancel_event.set()
+
+    job["log_queue"].put("Cancellation requested by user...")
+    if process and process.is_alive():
+        process.terminate()
+        process.join(timeout=5)
+        if process.is_alive():
+            process.kill()
+            process.join(timeout=5)
+
+    job["status"] = "cancelled"
+    job["error"] = "Audit cancelled by user"
+    job["finished_at"] = time.time()
+    job["log_queue"].put("__CANCELLED__")
+    return job
+
+
 # =============================================================================
-# Core audit runner  (runs in a background thread per job)
+# Core audit runner  (runs in a separate process per job)
 # =============================================================================
 
 def _run_audit(job_id: str, start_date: str, end_date: str,
-               resolver_group: str, threshold: float):
+               resolver_group: str, threshold: float,
+               log_queue, cancel_event, record_path: str):
     """
     Full audit pipeline:
       1. Fetch + enrich incidents from ServiceNow (DB-aware)
@@ -268,8 +366,22 @@ def _run_audit(job_id: str, start_date: str, end_date: str,
       3. Write Excel report
       4. Return structured JSON results
     """
-    job   = JOBS[job_id]
-    log_q = job["log_queue"]
+    job = {
+        "log_queue"  : log_queue,
+        "status"     : "running",
+        "results"    : None,
+        "error"      : None,
+        "excel_path" : None,
+        "record_path": record_path,
+        "params"     : {
+            "start_date"    : start_date,
+            "end_date"      : end_date,
+            "resolver_group": resolver_group,
+            "threshold"     : threshold,
+        },
+    }
+    log_q = log_queue
+    cancel_check = cancel_event.is_set
 
     def log(msg: str):
         ts  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -280,11 +392,15 @@ def _run_audit(job_id: str, start_date: str, end_date: str,
     tickets = []
 
     try:
+        _raise_if_cancelled(cancel_check)
+
         # ── 1. Init ───────────────────────────────────────────────────────────
         log("Initialising components...")
-        fetcher      = IncidentFetcher(SN_INSTANCE, SN_USER, SN_PASSWORD)
+        fetcher      = IncidentFetcher(SN_INSTANCE, SN_USER, SN_PASSWORD, log_callback=log)
         db_config    = DBConfig()
         orchestrator = IncidentOrchestrator(db_config, fetcher)
+
+        _raise_if_cancelled(cancel_check)
 
         # ── 2. Fetch + store (DB-aware, only new/modified from ServiceNow) ────
         log(f"Fetching incidents from {start_date} to {end_date}...")
@@ -293,19 +409,27 @@ def _run_audit(job_id: str, start_date: str, end_date: str,
             end_date       = end_date,
             ticket_type    = "incident",
             resolver_group = resolver_group or None,
+            cancel_check   = cancel_check,
         )
         analysis = orch_result["analysis"]
+        if orch_result.get("cancelled"):
+            raise JobCancelled("Audit cancelled by user")
         log(
             f"Orchestration done — new:{analysis['new_count']} "
             f"modified:{analysis['modified_count']} "
             f"unchanged:{analysis['unchanged_count']}"
         )
 
+        _raise_if_cancelled(cancel_check)
+
         # ── 3. Load incidents from DB ─────────────────────────────────────────
         log("Loading incidents from database...")
         db_result  = orchestrator.get_incidents_in_database(start_date, end_date)
         db_incidents = db_result["incidents"]   # dict {sys_id: ORM object}
         total        = db_result["count"]
+        log(f"Loaded {total} incident(s) from database for this range")
+
+        _raise_if_cancelled(cancel_check)
 
         if total == 0:
             log("No incidents found for the given filters.")
@@ -315,20 +439,24 @@ def _run_audit(job_id: str, start_date: str, end_date: str,
             return
 
         # ── 4. Excel output ───────────────────────────────────────────────────
-        excel_path = str(ROOT_DIR / f"Audit_Report_{job_id}.xlsx")
+        excel_path = str(AUDITS_DIR / f"Audit_Report_{job_id}.xlsx")
+        record_path = str(AUDITS_DIR / f"Audit_Record_{job_id}.json")
         log(f"Initialising Excel report → {excel_path}")
         excel = ExcelHandler(TEMPLATE_PATH, excel_path, pass_threshold=threshold)
         job["excel_path"] = excel_path
+        job["record_path"] = record_path
 
         # ── 5. Audit loop ─────────────────────────────────────────────────────
         log(f"Starting audit for {total} incident(s)...")
 
         for idx, (sys_id, incident_orm) in enumerate(db_incidents.items(), 1):
+            _raise_if_cancelled(cancel_check)
             number = incident_orm.number
-            log(f"[{idx}/{total}] Auditing {number}...")
 
             try:
                 incident_dict = _incident_orm_to_dict(incident_orm)
+                # Log every ticket for accurate progress tracking
+                log(f"[{idx}/{total}] Auditing {number}...")
                 auditor       = Auditor(incident_dict)
                 audit_data    = auditor.get_audit_data()
                 scores        = _compute_score(audit_data, threshold)
@@ -350,8 +478,6 @@ def _run_audit(job_id: str, start_date: str, end_date: str,
                     "observation"   : _build_observation(audit_data),
                 })
 
-                log(f"  ✓ {number} → {scores['percentage']}% {scores['quality_result']}")
-
             except Exception as e:
                 logger.exception(f"Error auditing {number}")
                 log(f"  ✗ {number} error: {e}")
@@ -365,6 +491,8 @@ def _run_audit(job_id: str, start_date: str, end_date: str,
                     "quality_result": "ERROR",
                     "observation"   : str(e),
                 })
+
+            _raise_if_cancelled(cancel_check)
 
         # ── 6. Save Excel ─────────────────────────────────────────────────────
         excel.save()
@@ -398,8 +526,27 @@ def _run_audit(job_id: str, start_date: str, end_date: str,
                 "unchanged": analysis["unchanged_count"],
             },
         }
+
+        audit_record = {
+            "job_id"    : job_id,
+            "status"    : "completed",
+            "created_at" : datetime.utcnow().isoformat(),
+            "finished_at": datetime.utcnow().isoformat(),
+            "params"    : job.get("params", {}),
+            "results"   : job["results"],
+        }
+        with open(record_path, "w", encoding="utf-8") as fh:
+            json.dump(audit_record, fh, indent=2, default=str)
+
         job["status"] = "done"
         log(f"Audit complete — {passed} PASS / {failed} FAIL / {errors} ERROR")
+
+    except JobCancelled as e:
+        logger.info("Audit job cancelled: %s", job_id)
+        log(str(e))
+        job["status"] = "cancelled"
+        job["error"] = str(e)
+        job["results"] = None
 
     except Exception as e:
         logger.exception("Fatal error in audit job")
@@ -410,7 +557,7 @@ def _run_audit(job_id: str, start_date: str, end_date: str,
 
     finally:
         job["finished_at"] = time.time()
-        log_q.put("__DONE__")
+        log_q.put("__CANCELLED__" if job.get("status") == "cancelled" else "__DONE__")
 
 
 def _build_observation(audit_data: dict) -> str:
@@ -522,12 +669,20 @@ def generate_report():
 
         # Create job
         job_id = str(uuid.uuid4())[:12]
+        log_queue    = MP_CTX.Queue()
+        cancel_event = MP_CTX.Event()
+        excel_path   = str(AUDITS_DIR / f"Audit_Report_{job_id}.xlsx")
+        record_path  = str(AUDITS_DIR / f"Audit_Record_{job_id}.json")
         JOBS[job_id] = {
-            "log_queue"  : queue.Queue(),
+            "log_queue"  : log_queue,
             "status"     : "running",
+            "cancel_requested": False,
             "results"    : None,
             "error"      : None,
-            "excel_path" : None,
+            "excel_path" : excel_path,
+            "record_path": record_path,
+            "process"    : None,
+            "cancel_event": cancel_event,
             "finished_at": None,
             "created_at" : time.time(),
             "params"     : {
@@ -538,12 +693,22 @@ def generate_report():
             },
         }
 
-        thread = threading.Thread(
-            target  = _run_audit,
-            args    = (job_id, start_date, end_date, resolver_group, threshold),
-            daemon  = True,
+        process = MP_CTX.Process(
+            target = _run_audit,
+            args   = (
+                job_id,
+                start_date,
+                end_date,
+                resolver_group,
+                threshold,
+                log_queue,
+                cancel_event,
+                record_path,
+            ),
+            daemon = True,
         )
-        thread.start()
+        process.start()
+        JOBS[job_id]["process"] = process
 
         logger.info(f"Audit job started: {job_id}")
 
@@ -562,6 +727,36 @@ def generate_report():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/cancel-report/<job_id>", methods=["POST"])
+def cancel_report(job_id: str):
+    if job_id not in JOBS:
+        return jsonify({"error": f"Job {job_id} not found"}), 404
+
+    job = _terminate_job(job_id)
+    if not job:
+        return jsonify({"error": f"Job {job_id} not found"}), 404
+
+    return jsonify({
+        "job_id": job_id,
+        "status": "cancelled",
+        "message": "Cancellation requested",
+    }), 202
+
+
+@app.route("/api/cancel-report/", methods=["POST"])
+def cancel_report_active():
+    job_id = _find_active_job_id()
+    if not job_id:
+        return jsonify({"error": "No running job found"}), 404
+
+    _terminate_job(job_id)
+    return jsonify({
+        "job_id": job_id,
+        "status": "cancelled",
+        "message": "Cancellation requested",
+    }), 202
+
+
 @app.route("/api/report-status/<job_id>", methods=["GET"])
 def report_status(job_id: str):
     """
@@ -576,10 +771,16 @@ def report_status(job_id: str):
     if job_id not in JOBS:
         return jsonify({"error": f"Job {job_id} not found"}), 404
 
-    job = JOBS[job_id]
+    job = _sync_job_state(job_id)
+    if not job:
+        return jsonify({"error": f"Job {job_id} not found"}), 404
+
+    status = job["status"]
+    if status == "running" and job.get("cancel_requested"):
+        status = "cancelling"
     return jsonify({
         "job_id"   : job_id,
-        "status"   : job["status"],
+        "status"   : status,
         "params"   : job.get("params", {}),
         "timestamp": datetime.utcnow().isoformat(),
     }), 200
@@ -649,7 +850,16 @@ def report_results(job_id: str):
     if job_id not in JOBS:
         return jsonify({"error": f"Job {job_id} not found"}), 404
 
-    job = JOBS[job_id]
+    job = _sync_job_state(job_id)
+    if not job:
+        return jsonify({"error": f"Job {job_id} not found"}), 404
+
+    if job["status"] == "cancelled":
+        return jsonify({
+            "job_id": job_id,
+            "status": "cancelled",
+            "error" : job.get("error", "Audit cancelled by user"),
+        }), 200
 
     if job["status"] == "running":
         return jsonify({
@@ -658,12 +868,35 @@ def report_results(job_id: str):
             "message": "Audit still in progress. Try again shortly.",
         }), 202
 
+    if job["status"] == "cancelling":
+        return jsonify({
+            "job_id" : job_id,
+            "status" : "cancelling",
+            "message": "Cancellation in progress. Try again shortly.",
+        }), 202
+
     if job["status"] == "error":
         return jsonify({
             "job_id": job_id,
             "status": "error",
             "error" : job.get("error"),
         }), 500
+
+    if job["results"] is None:
+        record_path = job.get("record_path")
+        if record_path and os.path.exists(record_path):
+            try:
+                with open(record_path, "r", encoding="utf-8") as fh:
+                    payload = json.load(fh)
+                job["results"] = payload.get("results")
+            except Exception as exc:
+                job["status"] = "error"
+                job["error"] = f"Failed to load audit record: {exc}"
+                return jsonify({
+                    "job_id": job_id,
+                    "status": "error",
+                    "error" : job["error"],
+                }), 500
 
     return jsonify({
         "job_id"   : job_id,
@@ -696,6 +929,10 @@ def report_stream(job_id: str):
                     yield "data: __DONE__\n\n"
                     break
 
+                if msg == "__CANCELLED__":
+                    yield "data: __CANCELLED__\n\n"
+                    break
+
                 safe = msg.replace("\n", " ").replace("\r", " ")
                 yield f"data: {safe}\n\n"
 
@@ -719,7 +956,11 @@ def download_report(job_id: str):
     if job_id not in JOBS:
         return jsonify({"error": f"Job {job_id} not found"}), 404
 
-    path = JOBS[job_id].get("excel_path")
+    job = _sync_job_state(job_id)
+    if not job:
+        return jsonify({"error": f"Job {job_id} not found"}), 404
+
+    path = job.get("excel_path")
     if not path or not os.path.exists(path):
         return jsonify({"error": "Report file not ready or already deleted"}), 404
 

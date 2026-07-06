@@ -104,7 +104,7 @@ class IncidentFetcher:
             return combined.strip()
 
         except Exception as e:
-            print(f"  Warning: work_notes fetch failed for {sys_id}: {e}")
+            self._log(f"Warning: work_notes fetch failed for {sys_id}: {e}")
             return ""
 
     def _fetch_audit_history(self, sys_id: str) -> List[Dict[str, Any]]:
@@ -134,7 +134,7 @@ class IncidentFetcher:
             return resp.json().get("result", [])
 
         except Exception as e:
-            print(f"  Warning: audit_history fetch failed for {sys_id}: {e}")
+            self._log(f"Warning: audit_history fetch failed for {sys_id}: {e}")
             return []
 
     def _fetch_sla_data(self, sys_id: str) -> Dict[str, Any]:
@@ -176,7 +176,7 @@ class IncidentFetcher:
             return result
 
         except Exception as e:
-            print(f"  Warning: sla_data fetch failed for {sys_id}: {e}")
+            self._log(f"Warning: sla_data fetch failed for {sys_id}: {e}")
             return {
                 "response_sla_breached"  : None,
                 "resolution_sla_breached": None,
@@ -197,7 +197,7 @@ class IncidentFetcher:
         if not sys_id:
             return incident
 
-        self._log(f"  [{idx}/{total}] Fetching {number}...")
+        self._log(f"[{idx}/{total}] Enriching {number}...")
 
         with ThreadPoolExecutor(max_workers=CALLS_PER_INCIDENT) as ex:
             f_wn    = ex.submit(self._fetch_work_notes,    sys_id)
@@ -221,6 +221,7 @@ class IncidentFetcher:
         end_date       : str = "",
         resolver_group : Optional[str] = None,
         limit          : int = DEFAULT_LIMIT,
+        cancel_check   = None,
     ) -> List[Dict[str, Any]]:
         """
         Fetch all closed tickets within a date range and enrich each one
@@ -270,13 +271,17 @@ class IncidentFetcher:
             "sysparm_exclude_reference_link": "true",
         }
 
+        if cancel_check and cancel_check():
+            self._log("Cancellation requested before incident fetch started.")
+            return []
+
         # ── Step 1: Fetch ticket list ─────────────────────────────────────────
         try:
             self._log(f"Fetching {ticket_type} from {start_date} to {end_date}...")
             resp = requests.get(url, auth=self.auth, headers=self.headers, params=params, verify=True)
             resp.raise_for_status()
             tickets = resp.json().get("result", [])
-            self._log(f"Found {len(tickets)} {ticket_type}(s)")
+            self._log(f"Found {len(tickets)} {ticket_type}(s) in range {start_date} to {end_date}")
 
         except requests.exceptions.RequestException as e:
             self._log(f"Error fetching {ticket_type}: {e}")
@@ -285,20 +290,31 @@ class IncidentFetcher:
         if not tickets:
             return []
 
+        if cancel_check and cancel_check():
+            self._log("Cancellation requested before enrichment started.")
+            return []
+
         # ── Step 2: Enrich all tickets in parallel ─────────────────────────────
         total    = len(tickets)
         enriched = [None] * total   # preserve original order
 
         self._log(f"Enriching {total} {ticket_type}(s) in parallel (workers={MAX_INCIDENT_WORKERS})...")
 
-        with ThreadPoolExecutor(max_workers=MAX_INCIDENT_WORKERS) as ex:
+        ex = ThreadPoolExecutor(max_workers=MAX_INCIDENT_WORKERS)
+        try:
             future_to_idx = {
                 ex.submit(self._enrich_incident, ticket, idx, total): idx - 1
                 for idx, ticket in enumerate(tickets, 1)
             }
             for future in as_completed(future_to_idx):
+                if cancel_check and cancel_check():
+                    self._log("Cancellation requested during incident enrichment.")
+                    break
+
                 orig_idx           = future_to_idx[future]
                 enriched[orig_idx] = future.result()
+        finally:
+            ex.shutdown(wait=False, cancel_futures=True)
 
         self._log(f"All {total} {ticket_type}(s) enriched.")
         return enriched
