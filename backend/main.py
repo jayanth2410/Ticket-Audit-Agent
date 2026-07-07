@@ -18,6 +18,7 @@ import json
 import logging
 import multiprocessing as mp
 import queue
+import subprocess
 import time
 import uuid
 import smtplib
@@ -341,6 +342,17 @@ def _terminate_job(job_id: str):
     if process and process.is_alive():
         process.terminate()
         process.join(timeout=5)
+        if process.is_alive() and os.name == "nt" and process.pid:
+            try:
+                subprocess.run(
+                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+            except Exception:
+                pass
+            process.join(timeout=5)
         if process.is_alive():
             process.kill()
             process.join(timeout=5)
@@ -462,6 +474,7 @@ def _run_audit(job_id: str, start_date: str, end_date: str,
                 scores        = _compute_score(audit_data, threshold)
 
                 excel.write_audit_row(audit_data)
+                log(f"  ✓ {number} audited")
 
                 tickets.append({
                     "ticket_number" : audit_data.get("ticket_number", number),
@@ -495,7 +508,9 @@ def _run_audit(job_id: str, start_date: str, end_date: str,
             _raise_if_cancelled(cancel_check)
 
         # ── 6. Save Excel ─────────────────────────────────────────────────────
+        log("Generating Excel report...")
         excel.save()
+        log("Excel report saved")
 
         # ── 7. Build summary ──────────────────────────────────────────────────
         passed     = sum(1 for t in tickets if t["quality_result"] == "PASS")
@@ -970,6 +985,38 @@ def download_report(job_id: str):
         download_name  = f"Audit_Report_{job_id}.xlsx",
         mimetype       = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+
+
+@app.route("/api/cleanup-audits", methods=["POST"])
+def cleanup_audits():
+    """Delete all files inside the audits folder without removing the folder itself."""
+    deleted_files = []
+    skipped_items = []
+    errors = []
+
+    try:
+        for entry in AUDITS_DIR.iterdir():
+            if not entry.is_file():
+                skipped_items.append(entry.name)
+                continue
+
+            try:
+                entry.unlink()
+                deleted_files.append(entry.name)
+            except OSError as exc:
+                errors.append(f"{entry.name}: {exc}")
+
+        return jsonify({
+            "status": "ok",
+            "deleted_count": len(deleted_files),
+            "deleted_files": deleted_files,
+            "skipped_items": skipped_items,
+            "errors": errors,
+        }), 200
+
+    except Exception as exc:
+        logger.exception("Error cleaning audits folder")
+        return jsonify({"error": str(exc)}), 500
 
 
 @app.errorhandler(404)

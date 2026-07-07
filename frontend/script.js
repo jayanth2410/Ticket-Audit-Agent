@@ -36,6 +36,8 @@ const METRIC_MAX = {
   resolution_sla: 10, user_confirmation: 5, reopened_user_connect: 5, kba_education: 5,
 };
 
+const RESULTS_TIMEOUT_MS = 20 * 60 * 1000;
+
 // ── Progress step definitions (in order) ──────────────────────────────────
 // weight = how much of the overall bar each step occupies (must sum to 100)
 const STEPS = [
@@ -575,6 +577,18 @@ function _parseLogLine(msg) {
   }
 
   // ── 8. Report ─────────────────────────────────────────────────────────
+  if (msg.includes('Generating Excel report')) {
+    completeStep('audit', 'All tickets audited');
+    activateStep('report', 'Generating Excel report and computing summary…');
+    setStepDesc('report', 'Writing the workbook to disk…');
+    return;
+  }
+
+  if (msg.includes('Excel report saved')) {
+    setStepDesc('report', 'Workbook saved, building results payload…');
+    return;
+  }
+
   if (msg.match(/Audit complete/i)) {
     completeStep('audit', 'All tickets audited');
     activateStep('report', 'Generating Excel report and computing summary…');
@@ -673,7 +687,6 @@ async function cancelAudit(skipConfirm = false) {
 
   currentJobStatus = 'cancelling';
   document.getElementById('job-pill-text').textContent = 'Cancelling…';
-  toast('Cancellation requested.', 'warning');
 
   // Mark the current active step as cancelling
   for (const s of STEPS) {
@@ -684,13 +697,53 @@ async function cancelAudit(skipConfirm = false) {
   }
 
   try {
-    await fetch(`${API}/cancel-report/${currentJobId}`, {
+    const res = await fetch(`${API}/cancel-report/${currentJobId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: '{}',
       keepalive: true,
     });
+
+    if (res.ok) {
+      handleAuditCancelled('Cancellation requested.');
+    } else {
+      toast('Cancellation request failed.', 'error');
+    }
   } catch (e) { console.warn('Cancel request error:', e); }
+}
+
+async function clearAuditFiles() {
+  if (!window.confirm('Delete all files inside the audits folder? This cannot be undone.')) return;
+
+  const button = document.getElementById('btn-clear-audits');
+  if (button) button.disabled = true;
+
+  try {
+    const res = await fetch(`${API}/cleanup-audits`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      toast(data.error || 'Failed to clear audits folder', 'error');
+      return;
+    }
+
+    const deletedCount = data.deleted_count ?? 0;
+    const skippedCount = (data.skipped_items || []).length;
+    const errorCount = (data.errors || []).length;
+    toast(
+      `Cleared ${deletedCount} file${deletedCount === 1 ? '' : 's'} from audits folder${errorCount ? `, ${errorCount} error(s)` : ''}${skippedCount ? `, skipped ${skippedCount} folder item(s)` : ''}.`,
+      errorCount ? 'warning' : 'success'
+    );
+  } catch (e) {
+    console.warn('Clear audits request error:', e);
+    toast(`Request failed: ${e.message}`, 'error');
+  } finally {
+    if (button) button.disabled = false;
+  }
 }
 
 function handleAuditCancelled(message) {
@@ -716,12 +769,14 @@ function handleAuditCancelled(message) {
 // Fetch & render results (polls until done)
 // ═══════════════════════════════════════════════════════════════════════════
 async function fetchAndRenderResults(jobId) {
-  let attempts = 0;
-  while (attempts < 60) {
+  const deadline = Date.now() + RESULTS_TIMEOUT_MS;
+  while (Date.now() < deadline && currentJobStatus !== 'cancelled') {
     try {
       const r    = await fetch(`${API}/report-results/${jobId}`);
-      if (r.status === 202) { await sleep(2000); attempts++; continue; }
+      if (currentJobStatus === 'cancelled') return;
+      if (r.status === 202) { await sleep(2000); continue; }
       const data = await r.json();
+      if (currentJobStatus === 'cancelled') return;
 
       if (data.status === 'cancelled') {
         handleAuditCancelled(data.error || 'Audit cancelled.');
@@ -757,8 +812,8 @@ async function fetchAndRenderResults(jobId) {
       console.warn('Poll error:', e.message);
     }
     await sleep(3000);
-    attempts++;
   }
+  if (currentJobStatus === 'cancelled') return;
   toast('Timed out waiting for results', 'error');
   resetRunButton();
 }

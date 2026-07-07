@@ -11,13 +11,20 @@ class LLM:
     def __init__(self):
 
         api_key = os.getenv("GROQ_API_KEY")
+        timeout_raw = os.getenv("GROQ_REQUEST_TIMEOUT_SECONDS", "25")
+
+        try:
+            self.request_timeout = float(timeout_raw)
+        except (TypeError, ValueError):
+            self.request_timeout = 25.0
 
         if not api_key:
             raise ValueError("GROQ_API_KEY not found in environment variables")
 
         self.client = OpenAI(
             api_key=api_key,
-            base_url="https://api.groq.com/openai/v1"
+            base_url="https://api.groq.com/openai/v1",
+            timeout=self.request_timeout,
         )
 
         self.model = "llama-3.3-70b-versatile"
@@ -38,7 +45,8 @@ class LLM:
                     }
                 ],
                 temperature=0,
-                max_tokens=500
+                max_tokens=500,
+                timeout=self.request_timeout,
             )
 
             content = response.choices[0].message.content

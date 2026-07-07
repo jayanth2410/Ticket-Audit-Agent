@@ -262,6 +262,16 @@
           <div class="empty-desc">Configure your date range above and click <strong>Start Audit</strong> to begin quality analysis on your ServiceNow incidents.</div>
         </div>
 
+        <div class="action-bar" style="margin-top:24px">
+          <div class="action-bar-left">Delete generated reports and audit records from the audits folder.</div>
+          <div class="action-bar-right">
+            <button class="btn btn-danger" id="btn-clear-audits" onclick="clearAuditFiles()">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M3 6h18M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2m-8 0h8m-9 0l1 15a1 1 0 001 1h6a1 1 0 001-1l1-15" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              Clear Audits Folder
+            </button>
+          </div>
+        </div>
+
       </div>
     </div><!-- /view-audit -->
 

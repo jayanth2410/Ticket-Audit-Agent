@@ -36,8 +36,29 @@ class IncidentStorage:
         if not date_string or date_string.strip() == "":
             return None
         
+        raw = date_string.strip()
+
         try:
-            return datetime.strptime(date_string.strip(), "%Y-%m-%d %H:%M:%S")
+            return datetime.strptime(raw, "%Y-%m-%d %H:%M:%S")
+        except (ValueError, TypeError):
+            pass
+
+        for fmt in (
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%dT%H:%M:%S.%f",
+            "%Y-%m-%d %H:%M:%S.%f",
+            "%Y-%m-%dT%H:%M:%S%z",
+            "%Y-%m-%dT%H:%M:%S.%f%z",
+        ):
+            try:
+                parsed = datetime.strptime(raw.replace("Z", "+0000"), fmt)
+                return parsed.replace(tzinfo=None) if parsed.tzinfo else parsed
+            except (ValueError, TypeError):
+                continue
+
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            return parsed.replace(tzinfo=None) if parsed.tzinfo else parsed
         except (ValueError, TypeError):
             return None
 
