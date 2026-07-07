@@ -6,3 +6,4 @@ openpyxl
 openai
 sqlalchemy
 psycopg2-binary
+gunicorn
