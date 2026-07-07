@@ -441,9 +441,38 @@ def _run_audit(job_id: str, start_date: str, end_date: str,
         total        = db_result["count"]
         log(f"Loaded {total} incident(s) from database for this range")
 
+        audit_input = []
+        if total > 0:
+            audit_input = [
+                {
+                    "number": incident_orm.number,
+                    "incident_dict": _incident_orm_to_dict(incident_orm),
+                }
+                for incident_orm in db_incidents.values()
+            ]
+            total = len(audit_input)
+        else:
+            fetched_incidents = [
+                inc for inc in (orch_result.get("fetched_incidents") or [])
+                if isinstance(inc, dict)
+            ]
+            if fetched_incidents:
+                log(
+                    "No incidents loaded from database; falling back to freshly "
+                    f"fetched incidents ({len(fetched_incidents)}) for this run."
+                )
+                audit_input = [
+                    {
+                        "number": inc.get("number", "UNKNOWN"),
+                        "incident_dict": inc,
+                    }
+                    for inc in fetched_incidents
+                ]
+                total = len(audit_input)
+
         _raise_if_cancelled(cancel_check)
 
-        if total == 0:
+        if not audit_input:
             log("No incidents found for the given filters.")
             job["results"] = _build_empty_result(threshold, analysis)
             job["status"]  = "done"
@@ -461,12 +490,12 @@ def _run_audit(job_id: str, start_date: str, end_date: str,
         # ── 5. Audit loop ─────────────────────────────────────────────────────
         log(f"Starting audit for {total} incident(s)...")
 
-        for idx, (sys_id, incident_orm) in enumerate(db_incidents.items(), 1):
+        for idx, item in enumerate(audit_input, 1):
             _raise_if_cancelled(cancel_check)
-            number = incident_orm.number
+            number = item["number"]
 
             try:
-                incident_dict = _incident_orm_to_dict(incident_orm)
+                incident_dict = item["incident_dict"]
                 # Log every ticket for accurate progress tracking
                 log(f"[{idx}/{total}] Auditing {number}...")
                 auditor       = Auditor(incident_dict)

@@ -250,6 +250,7 @@ class IncidentOrchestrator:
                 'analysis': analysis,
                 'fetched_count': 0,
                 'storage_results': {'success': 0, 'failed': 0, 'total': 0, 'errors': []},
+                'fetched_incidents': [],
                 'cancelled': True,
             }
         
@@ -276,6 +277,7 @@ class IncidentOrchestrator:
                     'analysis': analysis,
                     'fetched_count': 0,
                     'storage_results': {'success': 0, 'failed': 0, 'total': 0, 'errors': []},
+                    'fetched_incidents': [],
                     'cancelled': True,
                 }
             
@@ -290,6 +292,7 @@ class IncidentOrchestrator:
             return {
                 'analysis': analysis,
                 'fetched_count': 0,
+                'fetched_incidents': [],
                 'storage_results': {
                     'success': 0,
                     'failed': 0,
@@ -322,6 +325,7 @@ class IncidentOrchestrator:
         return {
             'analysis': analysis,
             'fetched_count': len(filtered_incidents),
+            'fetched_incidents': filtered_incidents,
             'storage_results': storage_results,
             'cancelled': False,
         }

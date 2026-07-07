@@ -2,7 +2,8 @@
    AuditIQ — Frontend Script
    ══════════════════════════════════════════════════════════════════════════ */
 
-const API         ='http://172.19.0.34/api'; //http://localhost:5000/api';
+const API         ='http://172.19.0.34/api'; 
+//const API         ='http://localhost:5000/api';
 const STORAGE_KEY = 'auditiq_job_v2';
 
 // ── State ──────────────────────────────────────────────────────────────────
@@ -747,17 +748,42 @@ async function clearAuditFiles() {
 }
 
 function handleAuditCancelled(message) {
-  // Mark the active step (and all subsequent idle steps) as error/skipped
-  let seenActive = false;
-  for (const s of STEPS) {
-    if (_stepState[s.id] === 'active') {
-      errorStep(s.id, 'Cancelled');
-      seenActive = true;
-    } else if (seenActive && _stepState[s.id] === 'idle') {
-      const row = document.getElementById(`step-${s.id}`);
+  // Mark whichever step is currently active; if none is active, mark the
+  // latest non-idle step so the UI visibly lands in a cancelled terminal state.
+  let cancelledIndex = -1;
+  for (let i = 0; i < STEPS.length; i++) {
+    const id = STEPS[i].id;
+    if (_stepState[id] === 'active') {
+      errorStep(id, 'Cancelled');
+      cancelledIndex = i;
+      break;
+    }
+  }
+
+  if (cancelledIndex === -1) {
+    for (let i = STEPS.length - 1; i >= 0; i--) {
+      const id = STEPS[i].id;
+      if (_stepState[id] !== 'idle') {
+        errorStep(id, 'Cancelled');
+        cancelledIndex = i;
+        break;
+      }
+    }
+  }
+
+  if (cancelledIndex === -1) {
+    errorStep('connect', 'Cancelled');
+    cancelledIndex = 0;
+  }
+
+  for (let i = cancelledIndex + 1; i < STEPS.length; i++) {
+    const id = STEPS[i].id;
+    if (_stepState[id] === 'idle') {
+      const row = document.getElementById(`step-${id}`);
       if (row) row.className = 'step-row skipped';
     }
   }
+
   currentJobStatus = 'cancelled';
   clearSavedJob();
   document.getElementById('job-pill').style.display = 'none';
