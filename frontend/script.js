@@ -2,8 +2,8 @@
    AuditIQ — Frontend Script
    ══════════════════════════════════════════════════════════════════════════ */
 
-const API         ='http://172.19.0.34/api'; 
-//const API         ='http://localhost:5000/api';
+//const API = 'http://172.19.0.34/api';   // VM — swap to this when deployed
+const API   = 'http://localhost:5000/api'; // local dev
 const STORAGE_KEY = 'auditiq_job_v2';
 
 // ── State ──────────────────────────────────────────────────────────────────
@@ -180,18 +180,57 @@ function handleReloadCancelIfNeeded() {
 // ═══════════════════════════════════════════════════════════════════════════
 // Server health
 // ═══════════════════════════════════════════════════════════════════════════
+let _healthFailCount = 0;
+let _healthCheckInProgress = false;
+
 async function checkHealth() {
+  // Prevent overlapping health checks
+  if (_healthCheckInProgress) {
+    console.debug('[health] skipping check — previous check still in progress');
+    return;
+  }
+
+  _healthCheckInProgress = true;
   const el   = document.getElementById('server-status');
   const text = document.getElementById('server-status-text');
+  
   try {
-    const r = await fetch(`${API}/health`, { signal: AbortSignal.timeout(4000) });
+    const r = await fetch(`${API}/health`, { 
+      signal: AbortSignal.timeout(8000),
+      cache: 'no-store'
+    });
+    
     if (r.ok) {
+      _healthFailCount = 0;
       el.className     = 'server-status online';
       text.textContent = 'API connected';
-    } else throw new Error();
-  } catch {
-    el.className     = 'server-status offline';
-    text.textContent = 'API offline';
+      console.debug('[health] online');
+    } else {
+      _healthFailCount++;
+      console.warn(`[health] HTTP ${r.status} — fail count: ${_healthFailCount}`);
+      if (_healthFailCount >= 3) {
+        el.className     = 'server-status offline';
+        text.textContent = `API offline (HTTP ${r.status})`;
+      }
+    }
+  } catch (err) {
+    // AbortError means the request timed out or was cancelled by the browser.
+    // This is NOT a reliable signal that the server is down.
+    if (err.name === 'AbortError') {
+      console.debug('[health] request aborted/timed out — not counting as failure');
+      _healthCheckInProgress = false;
+      return;
+    }
+    
+    _healthFailCount++;
+    console.warn(`[health] ${err.name}: ${err.message} — fail count: ${_healthFailCount}`);
+    
+    if (_healthFailCount >= 3) {
+      el.className     = 'server-status offline';
+      text.textContent = 'API offline';
+    }
+  } finally {
+    _healthCheckInProgress = false;
   }
 }
 
@@ -230,22 +269,7 @@ function loadSavedJob() {
 // Progress Steps Engine
 // ═══════════════════════════════════════════════════════════════════════════
 
-// Possible step states: 'idle' | 'active' | 'done' | 'error' | 'skipped'
 const _stepState = { connect:'idle', fetch:'idle', db:'idle', enrich:'idle', audit:'idle', report:'idle' };
-let _auditHeartbeatTimer = null;
-let _auditLastTickAt = 0;
-let _auditLastKnownTotal = 0;
-let _auditPulsePct = 0;
-
-function _stopAuditHeartbeat() {
-  if (_auditHeartbeatTimer) {
-    clearInterval(_auditHeartbeatTimer);
-    _auditHeartbeatTimer = null;
-  }
-  _auditLastTickAt = 0;
-  _auditLastKnownTotal = 0;
-  _auditPulsePct = 0;
-}
 
 function _paintStepSubProgress(id, pct, labelText) {
   const bar = document.getElementById(`step-${id}-bar`);
@@ -255,44 +279,13 @@ function _paintStepSubProgress(id, pct, labelText) {
   _recalcOverall();
 }
 
-function _startAuditHeartbeat(total = 0) {
-  if (total > 0) _auditLastKnownTotal = total;
-  _auditLastTickAt = Date.now();
-  if (_auditHeartbeatTimer) return;
-
-  _auditPulsePct = 8;
-  _auditHeartbeatTimer = setInterval(() => {
-    if (_stepState.audit !== 'active' || currentJobStatus !== 'running') {
-      _stopAuditHeartbeat();
-      return;
-    }
-
-    const idleMs = Date.now() - _auditLastTickAt;
-    if (idleMs < 1800) return;
-
-    if (_auditLastKnownTotal > 0) {
-      _auditPulsePct = Math.min(_auditPulsePct + 2, 28);
-      const syntheticCurrent = Math.max(1, Math.round(_auditLastKnownTotal * _auditPulsePct / 100));
-      _paintStepSubProgress(
-        'audit',
-        _auditPulsePct,
-        `Auditing tickets… working on incident ${syntheticCurrent} of ${_auditLastKnownTotal}`
-      );
-    } else {
-      setStepDesc('audit', 'Auditing tickets… working on the current incident');
-    }
-  }, 900);
-}
-
 function resetSteps() {
-  _stopAuditHeartbeat();
   for (const s of STEPS) {
     _stepState[s.id] = 'idle';
     const row = document.getElementById(`step-${s.id}`);
     if (!row) continue;
     row.className = 'step-row';
     setStepDesc(s.id, _defaultDesc(s.id));
-    // reset sub-progress bars
     const bar = document.getElementById(`step-${s.id}-bar`);
     const lbl = document.getElementById(`step-${s.id}-label`);
     if (bar) bar.style.width = '0%';
@@ -324,12 +317,10 @@ function activateStep(id, desc) {
 
 function completeStep(id, desc) {
   _stepState[id] = 'done';
-  if (id === 'audit') _stopAuditHeartbeat();
   const row = document.getElementById(`step-${id}`);
   if (!row) return;
   row.className = 'step-row done';
   if (desc) setStepDesc(id, desc);
-  // fill sub-bar to 100 if present
   const bar = document.getElementById(`step-${id}-bar`);
   if (bar) bar.style.width = '100%';
   _recalcOverall();
@@ -337,7 +328,6 @@ function completeStep(id, desc) {
 
 function errorStep(id, desc) {
   _stepState[id] = 'error';
-  if (id === 'audit') _stopAuditHeartbeat();
   const row = document.getElementById(`step-${id}`);
   if (!row) return;
   row.className = 'step-row error';
@@ -350,24 +340,17 @@ function setStepDesc(id, text) {
   if (el) el.textContent = text;
 }
 
-// ── Per-step sub-progress throttle (audit has 1000 tickets — don't thrash DOM) ──
 let _lastAuditUpdate = 0;
 
 function setStepSubProgress(id, current, total) {
   if (!total) return;
   const pct = Math.round(current / total * 100);
-
-  // For audit, only update DOM every ~200ms or at start/end to avoid freezing
   if (id === 'audit') {
     const now = Date.now();
     const isEndpoint = (current === 1 || current === total || pct % 10 === 0);
     if (!isEndpoint && now - _lastAuditUpdate < 200) return;
     _lastAuditUpdate = now;
-    _auditLastTickAt = now;
-    _auditLastKnownTotal = total;
-    _auditPulsePct = pct;
   }
-
   _paintStepSubProgress(id, pct, `${current} / ${total}  (${pct}%)`);
 }
 
@@ -554,25 +537,21 @@ function _parseLogLine(msg) {
   if (startAuditM || msg.includes('Initialising Excel')) {
     if (_stepState['db'] === 'active')     completeStep('db', 'Database check complete');
     if (_stepState['enrich'] === 'active') completeStep('enrich', 'Enrichment complete');
-    // Always (re)activate audit at this point so spinner shows
     const n = startAuditM?.[1] ?? '';
     activateStep('audit', `Running quality checks${n ? ` on ${n} tickets` : ''}…`);
-    _startAuditHeartbeat(n ? Number(n) : 0);
     return;
   }
 
-  // "[n/total] Auditing INCxxxxxxx"
-  const auditM = msg.match(/\[(\d+)\/(\d+)\]\s+Auditing\s+(\S+)/i);
+  // "[n/total] Audited INCxxxxxxx"  (backend now uses "Audited" not "Auditing")
+  const auditM = msg.match(/\[(\d+)\/(\d+)\]\s+Audited\s+(\S+)/i);
   if (auditM) {
     const cur   = +auditM[1];
     const total = +auditM[2];
-    const num   = auditM[3].replace(/\.*$/, ''); // strip trailing dots
-    if (_stepState['audit'] !== 'active') activateStep('audit', `Auditing ${num}  (${cur} of ${total})`);
-    _startAuditHeartbeat(total);
+    const num   = auditM[3].replace(/\.*$/, '');
+    if (_stepState['audit'] !== 'active') activateStep('audit', `Auditing tickets…`);
     setStepSubProgress('audit', cur, total);
-    // Throttle desc update: only update on every 10th ticket or first/last
     if (cur === 1 || cur === total || cur % 10 === 0) {
-      setStepDesc('audit', `Auditing ${num}  (${cur} of ${total})`);
+      setStepDesc('audit', `${num}  (${cur} of ${total})`);
     }
     return;
   }
@@ -580,19 +559,20 @@ function _parseLogLine(msg) {
   // ── 8. Report ─────────────────────────────────────────────────────────
   if (msg.includes('Generating Excel report')) {
     completeStep('audit', 'All tickets audited');
-    activateStep('report', 'Generating Excel report and computing summary…');
-    setStepDesc('report', 'Writing the workbook to disk…');
+    activateStep('report', 'Generating Excel report…');
     return;
   }
 
   if (msg.includes('Excel report saved')) {
-    setStepDesc('report', 'Workbook saved, building results payload…');
+    setStepDesc('report', 'Workbook saved…');
     return;
   }
 
   if (msg.match(/Audit complete/i)) {
+    // Backend is done — complete both audit and report steps immediately
     completeStep('audit', 'All tickets audited');
-    activateStep('report', 'Generating Excel report and computing summary…');
+    completeStep('report', 'Report generated successfully');
+    setOverallProgress(99);
     return;
   }
 
@@ -809,11 +789,12 @@ async function fetchAndRenderResults(jobId) {
         return;
       }
       if (data.status === 'completed' && data.results) {
-        // Complete the report step and set overall to 100%
-        completeStep('report', 'Report generated successfully');
+        // Complete report step only if SSE didn't already do it
+        if (_stepState['report'] !== 'done') {
+          completeStep('report', 'Report generated successfully');
+        }
         setOverallProgress(100);
-        await sleep(400); // brief pause so user sees 100%
-
+        await sleep(400);
         renderAll(data.results, jobId);
         document.getElementById('job-pill').style.display = 'none';
         currentJobStatus = 'done';

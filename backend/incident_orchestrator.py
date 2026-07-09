@@ -70,10 +70,7 @@ class IncidentOrchestrator:
                 'incidents': incidents_dict,
                 'count': len(incidents)
             }
-        
-            
 
-        
         finally:
             session.close()
 
@@ -142,17 +139,17 @@ class IncidentOrchestrator:
         }
         
         try:
-            resp = self.fetcher._session_get(url, params=params) if hasattr(self.fetcher, '_session_get') else \
-                   self.fetcher._make_request(url, params=params) if hasattr(self.fetcher, '_make_request') else \
-                   self._fallback_request(url, params)
-            
-            if isinstance(resp, dict) and 'result' in resp:
-                sn_incidents = resp['result']
-            else:
-                import requests
-                resp = requests.get(url, auth=self.fetcher.auth, headers=self.fetcher.headers, params=params, verify=True)
-                resp.raise_for_status()
-                sn_incidents = resp.json().get('result', [])
+            import requests as _requests
+            resp = _requests.get(
+                url,
+                auth    = self.fetcher.auth,
+                headers = self.fetcher.headers,
+                params  = params,
+                verify  = True,
+                timeout = 30,
+            )
+            resp.raise_for_status()
+            sn_incidents = resp.json().get('result', [])
         
         except Exception as e:
             self._log(f"Error fetching incident list from ServiceNow: {e}")
@@ -329,10 +326,3 @@ class IncidentOrchestrator:
             'storage_results': storage_results,
             'cancelled': False,
         }
-
-    def _fallback_request(self, url: str, params: dict):
-        """Fallback request method using requests library"""
-        import requests
-        resp = requests.get(url, auth=self.fetcher.auth, headers=self.fetcher.headers, params=params, verify=True)
-        resp.raise_for_status()
-        return resp.json()

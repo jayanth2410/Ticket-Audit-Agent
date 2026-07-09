@@ -1,15 +1,22 @@
 """
-main.py — Ticket Audit Agent  (single entry point)
-====================================================
+main.py — Ticket Audit Agent API
+==================================
 Run:
     cd backend
     python main.py
 
-API:
-    POST /api/generate-report
-    Body: { "start_date", "end_date", "resolver_group"(opt), "threshold"(opt) }
-
+Endpoints:
+    POST /api/generate-report   — start an audit job
+    GET  /api/report-status/<job_id>
+    GET  /api/report-stream/<job_id>   — SSE log stream
+    GET  /api/report-results/<job_id>
+    POST /api/cancel-report/<job_id>
+    GET  /api/download-report/<job_id>
+    POST /api/cleanup-audits
     GET  /api/health
+
+Job state (status, logs, cancel signal) is stored in Redis so any
+Gunicorn worker can serve any request for any job.
 """
 
 import os
@@ -17,11 +24,8 @@ import sys
 import json
 import logging
 import multiprocessing as mp
-import queue
-import subprocess
 import time
 import uuid
-import smtplib
 from datetime import datetime
 from pathlib import Path
 
@@ -39,10 +43,10 @@ load_dotenv(ROOT_DIR / ".env")
 # ── Local imports ─────────────────────────────────────────────────────────────
 from incident_fetcher      import IncidentFetcher
 from incident_orchestrator import IncidentOrchestrator
-from incident_storage      import IncidentStorage
 from db_config             import DBConfig
 from auditor               import Auditor
 from excel_handler         import ExcelHandler
+from redis_job_store       import RedisJobStore, RedisUnavailableError
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -56,10 +60,39 @@ SN_INSTANCE  = os.getenv("SERVICENOW_INSTANCE", "")
 SN_USER      = os.getenv("SERVICENOW_USER",     "")
 SN_PASSWORD  = os.getenv("SERVICENOW_PASSWORD", "")
 TEMPLATE_PATH = str(ROOT_DIR / "Audit_Report_Template.xlsx")
-AUDITS_DIR = ROOT_DIR / "audits"
+AUDITS_DIR    = ROOT_DIR / "audits"
 DEFAULT_THRESHOLD = 70.0
 
-# ── Metric definitions (for scoring) ─────────────────────────────────────────
+# ── Redis config (read from .env with sensible defaults) ──────────────────────
+REDIS_HOST     = os.getenv("REDIS_HOST",     "localhost")
+REDIS_PORT     = int(os.getenv("REDIS_PORT", "6379"))
+REDIS_DB       = int(os.getenv("REDIS_DB",   "0"))
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)   # None means no auth
+
+# ── Shared Redis job store ────────────────────────────────────────────────────
+#
+# One instance per Flask worker process.  Each worker gets its own TCP
+# connection to Redis.  All workers see the same data because they all
+# point at the same Redis server.
+#
+store = RedisJobStore(
+    host     = REDIS_HOST,
+    port     = REDIS_PORT,
+    db       = REDIS_DB,
+    password = REDIS_PASSWORD,
+)
+logger.info(f"Redis store created — host={REDIS_HOST} port={REDIS_PORT} db={REDIS_DB} ping={store.ping()}")
+
+# ── Local process registry ────────────────────────────────────────────────────
+#
+# This dict only tracks the Process object so we can join/terminate it as a
+# hard-stop fallback.  It lives in-process (like the old JOBS dict) but that
+# is fine: terminate() only needs to run in the worker that started the process,
+# and the cooperative cancel (Redis key) handles cross-worker cancellation.
+#
+_PROCESSES: dict = {}   # job_id -> mp.Process
+
+# ── Metric definitions ────────────────────────────────────────────────────────
 METRIC_MAX_SCORES = {
     "response_within_sla"      : 5,
     "short_desc_quality"       : 5,
@@ -75,12 +108,7 @@ METRIC_MAX_SCORES = {
     "kba_education"            : 5,
 }
 
-# ── In-memory job store (for async polling) ───────────────────────────────────
-JOBS: dict = {}
-JOB_TTL    = 3600  # 1 hour
-
 AUDITS_DIR.mkdir(exist_ok=True)
-
 MP_CTX = mp.get_context("spawn")
 
 
@@ -90,21 +118,15 @@ class JobCancelled(Exception):
 
 # ── Flask ─────────────────────────────────────────────────────────────────────
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins="*", supports_credentials=False)
 
 
 # =============================================================================
-# Helpers
+# Helpers  (unchanged from original — pure data logic, no job-store calls)
 # =============================================================================
 
 def _incident_orm_to_dict(incident) -> dict:
-    """
-    Convert a SQLAlchemy Incident ORM object into a plain dict that the
-    Auditor can consume.  All fields the Auditor needs are mapped here.
-    Missing fields caused the NA flood — keep this list complete.
-    """
     def _dt(val):
-        """datetime → ISO string; already string → as-is; None → ''"""
         if val is None:
             return ""
         if isinstance(val, datetime):
@@ -120,11 +142,9 @@ def _incident_orm_to_dict(incident) -> dict:
         except (TypeError, ValueError):
             return 0
 
-    # ── Convert audit_history ORM objects to plain dicts ─────────────────────
     audit_history_dicts = []
     for ah in (incident.audit_history or []):
         if hasattr(ah, "fieldname"):
-            # It's still an ORM AuditHistory object
             audit_history_dicts.append({
                 "fieldname"      : _str(ah.fieldname),
                 "oldvalue"       : _str(ah.oldvalue),
@@ -134,58 +154,33 @@ def _incident_orm_to_dict(incident) -> dict:
             })
         elif isinstance(ah, dict):
             audit_history_dicts.append(ah)
-        # skip stringified repr objects (legacy db_incidents.json artefacts)
 
     return {
-        # identifiers
         "sys_id"              : _str(incident.sys_id),
         "number"              : _str(incident.number),
-
-        # header fields for the report
         "opened_by"           : _str(incident.opened_by),
         "priority"            : _str(incident.priority),
         "u_tcs_resolver_group": _str(incident.u_tcs_resolver_group),
         "assignment_group"    : _str(incident.assignment_group),
         "resolved_by"         : _str(incident.resolved_by),
-
-        # description
         "short_description"   : _str(incident.short_description),
         "description"         : _str(incident.description),
-
-        # state
         "state"               : _str(incident.state),
         "hold_reason"         : _str(incident.hold_reason),
-
-        # dates
         "opened_at"           : _dt(incident.opened_at),
         "closed_at"           : _dt(incident.closed_at),
         "resolved_at"         : _dt(incident.resolved_at),
         "reopened_time"       : _dt(incident.reopened_time),
-
-        # counts
         "reassignment_count"  : _int(incident.reassignment_count),
         "reopen_count"        : _int(incident.reopen_count),
-
-        # SLA
         "sla_data"            : incident.sla_data or {},
-
-        # resolution
         "close_notes"         : _str(incident.close_notes),
         "close_code"          : _str(incident.close_code),
-
-        # journals (work_notes stored as combined string in DB)
         "work_notes"          : _str(incident.work_notes),
         "comments"            : _str(incident.comments),
         "comments_and_work_notes": _str(incident.comments_and_work_notes),
-
-        # KBA flag
         "knowledge"           : incident.knowledge,
-
-        # audit trail
         "audit_history"       : audit_history_dicts,
-
-        # misc
-        "priority"            : _str(incident.priority),
         "urgency"             : _str(incident.urgency),
         "severity"            : _str(incident.severity),
         "impact"              : _str(incident.impact),
@@ -197,10 +192,8 @@ def _incident_orm_to_dict(incident) -> dict:
 
 
 def _compute_score(audit_data: dict, threshold: float) -> dict:
-    """Compute score, out_of, percentage and quality_result for one ticket."""
     score  = 0
     out_of = 0
-
     for metric, max_pts in METRIC_MAX_SCORES.items():
         value = audit_data.get(metric, "NA")
         if value == "NA":
@@ -208,404 +201,33 @@ def _compute_score(audit_data: dict, threshold: float) -> dict:
         out_of += max_pts
         if value == "Yes":
             score += max_pts
-
     percentage     = round(score / out_of * 100, 1) if out_of > 0 else 0.0
     quality_result = "PASS" if percentage >= threshold else "FAIL"
-
-    return {
-        "score"         : score,
-        "out_of"        : out_of,
-        "percentage"    : percentage,
-        "quality_result": quality_result,
-    }
+    return {"score": score, "out_of": out_of, "percentage": percentage, "quality_result": quality_result}
 
 
 def _build_metrics_summary(tickets: list) -> dict:
-    """Aggregate per-metric yes/no/na counts across all audited tickets."""
     yes = {m: 0 for m in METRIC_MAX_SCORES}
     no  = {m: 0 for m in METRIC_MAX_SCORES}
     na  = {m: 0 for m in METRIC_MAX_SCORES}
-
     for t in tickets:
         for metric, val in t.get("metrics", {}).items():
-            if val == "Yes":
-                yes[metric] += 1
-            elif val == "No":
-                no[metric]  += 1
-            else:
-                na[metric]  += 1
-
+            if val == "Yes":   yes[metric] += 1
+            elif val == "No":  no[metric]  += 1
+            else:              na[metric]  += 1
     summary = {}
     for metric in METRIC_MAX_SCORES:
         applicable = yes[metric] + no[metric]
         pass_pct   = round(yes[metric] / applicable * 100, 1) if applicable else 0.0
         summary[metric] = {
-            "yes"       : yes[metric],
-            "no"        : no[metric],
-            "na"        : na[metric],
-            "applicable": applicable,
-            "pass_pct"  : pass_pct,
-            "max_score" : METRIC_MAX_SCORES[metric],
+            "yes": yes[metric], "no": no[metric], "na": na[metric],
+            "applicable": applicable, "pass_pct": pass_pct,
+            "max_score": METRIC_MAX_SCORES[metric],
         }
-
     return summary
 
 
-def _cleanup_old_jobs():
-    now = time.time()
-    for jid in list(JOBS.keys()):
-        job = JOBS[jid]
-        if job["status"] in ("done", "error"):
-            if now - job.get("finished_at", now) > JOB_TTL:
-                for path in (job.get("excel_path"), job.get("record_path")):
-                    if path and os.path.exists(path):
-                        try:
-                            os.remove(path)
-                        except OSError:
-                            pass
-                JOBS.pop(jid, None)
-
-
-def _raise_if_cancelled(cancel_check):
-    if cancel_check():
-        raise JobCancelled("Audit cancelled by user")
-
-
-def _sync_job_state(job_id: str):
-    job = JOBS.get(job_id)
-    if not job:
-        return None
-
-    process = job.get("process")
-    if job["status"] in ("done", "error", "cancelled"):
-        return job
-
-    if process and not process.is_alive():
-        if job.get("cancel_requested"):
-            job["status"] = "cancelled"
-            job["finished_at"] = job.get("finished_at") or time.time()
-            return job
-
-        if process.exitcode == 0:
-            record_path = job.get("record_path")
-            if record_path and os.path.exists(record_path) and job.get("results") is None:
-                try:
-                    with open(record_path, "r", encoding="utf-8") as fh:
-                        payload = json.load(fh)
-                    job["results"] = payload.get("results")
-                    job["status"] = payload.get("status", "done")
-                except Exception as exc:
-                    job["status"] = "error"
-                    job["error"] = f"Failed to load audit record: {exc}"
-            else:
-                job["status"] = "done"
-            job["finished_at"] = job.get("finished_at") or time.time()
-            return job
-
-        job["status"] = "error"
-        job["error"] = job.get("error") or f"Audit process exited with code {process.exitcode}"
-        job["finished_at"] = job.get("finished_at") or time.time()
-
-    return job
-
-
-def _find_active_job_id() -> str | None:
-    active_jobs = [
-        (jid, job)
-        for jid, job in JOBS.items()
-        if job.get("status") in ("running", "cancelling") and job.get("process")
-    ]
-    if not active_jobs:
-        return None
-    active_jobs.sort(key=lambda item: item[1].get("created_at", 0), reverse=True)
-    return active_jobs[0][0]
-
-
-def _terminate_job(job_id: str):
-    job = _sync_job_state(job_id)
-    if not job:
-        return None
-
-    if job["status"] in ("done", "error", "cancelled"):
-        return job
-
-    job["cancel_requested"] = True
-    if job["status"] == "running":
-        job["status"] = "cancelling"
-
-    process = job.get("process")
-    cancel_event = job.get("cancel_event")
-    if cancel_event:
-        cancel_event.set()
-
-    job["log_queue"].put("Cancellation requested by user...")
-    if process and process.is_alive():
-        process.terminate()
-        process.join(timeout=5)
-        if process.is_alive() and os.name == "nt" and process.pid:
-            try:
-                subprocess.run(
-                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-            except Exception:
-                pass
-            process.join(timeout=5)
-        if process.is_alive():
-            process.kill()
-            process.join(timeout=5)
-
-    job["status"] = "cancelled"
-    job["error"] = "Audit cancelled by user"
-    job["finished_at"] = time.time()
-    job["log_queue"].put("__CANCELLED__")
-    return job
-
-
-# =============================================================================
-# Core audit runner  (runs in a separate process per job)
-# =============================================================================
-
-def _run_audit(job_id: str, start_date: str, end_date: str,
-               resolver_group: str, threshold: float,
-               log_queue, cancel_event, record_path: str):
-    """
-    Full audit pipeline:
-      1. Fetch + enrich incidents from ServiceNow (DB-aware)
-      2. Audit each incident through all metric checks
-      3. Write Excel report
-      4. Return structured JSON results
-    """
-    job = {
-        "log_queue"  : log_queue,
-        "status"     : "running",
-        "results"    : None,
-        "error"      : None,
-        "excel_path" : None,
-        "record_path": record_path,
-        "params"     : {
-            "start_date"    : start_date,
-            "end_date"      : end_date,
-            "resolver_group": resolver_group,
-            "threshold"     : threshold,
-        },
-    }
-    log_q = log_queue
-    cancel_check = cancel_event.is_set
-
-    def log(msg: str):
-        ts  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        fmt = f"[{ts}] {msg}"
-        logger.info(msg)
-        log_q.put(fmt)
-
-    tickets = []
-
-    try:
-        _raise_if_cancelled(cancel_check)
-
-        # ── 1. Init ───────────────────────────────────────────────────────────
-        log("Initialising components...")
-        fetcher      = IncidentFetcher(SN_INSTANCE, SN_USER, SN_PASSWORD, log_callback=log)
-        db_config    = DBConfig()
-        orchestrator = IncidentOrchestrator(db_config, fetcher)
-
-        _raise_if_cancelled(cancel_check)
-
-        # ── 2. Fetch + store (DB-aware, only new/modified from ServiceNow) ────
-        log(f"Fetching incidents from {start_date} to {end_date}...")
-        orch_result = orchestrator.fetch_and_store(
-            start_date     = start_date,
-            end_date       = end_date,
-            ticket_type    = "incident",
-            resolver_group = resolver_group or None,
-            cancel_check   = cancel_check,
-        )
-        analysis = orch_result["analysis"]
-        if orch_result.get("cancelled"):
-            raise JobCancelled("Audit cancelled by user")
-        log(
-            f"Orchestration done — new:{analysis['new_count']} "
-            f"modified:{analysis['modified_count']} "
-            f"unchanged:{analysis['unchanged_count']}"
-        )
-
-        _raise_if_cancelled(cancel_check)
-
-        # ── 3. Load incidents from DB ─────────────────────────────────────────
-        log("Loading incidents from database...")
-        db_result  = orchestrator.get_incidents_in_database(start_date, end_date)
-        db_incidents = db_result["incidents"]   # dict {sys_id: ORM object}
-        total        = db_result["count"]
-        log(f"Loaded {total} incident(s) from database for this range")
-
-        audit_input = []
-        if total > 0:
-            audit_input = [
-                {
-                    "number": incident_orm.number,
-                    "incident_dict": _incident_orm_to_dict(incident_orm),
-                }
-                for incident_orm in db_incidents.values()
-            ]
-            total = len(audit_input)
-        else:
-            fetched_incidents = [
-                inc for inc in (orch_result.get("fetched_incidents") or [])
-                if isinstance(inc, dict)
-            ]
-            if fetched_incidents:
-                log(
-                    "No incidents loaded from database; falling back to freshly "
-                    f"fetched incidents ({len(fetched_incidents)}) for this run."
-                )
-                audit_input = [
-                    {
-                        "number": inc.get("number", "UNKNOWN"),
-                        "incident_dict": inc,
-                    }
-                    for inc in fetched_incidents
-                ]
-                total = len(audit_input)
-
-        _raise_if_cancelled(cancel_check)
-
-        if not audit_input:
-            log("No incidents found for the given filters.")
-            job["results"] = _build_empty_result(threshold, analysis)
-            job["status"]  = "done"
-            log_q.put("__DONE__")
-            return
-
-        # ── 4. Excel output ───────────────────────────────────────────────────
-        excel_path = str(AUDITS_DIR / f"Audit_Report_{job_id}.xlsx")
-        record_path = str(AUDITS_DIR / f"Audit_Record_{job_id}.json")
-        log(f"Initialising Excel report → {excel_path}")
-        excel = ExcelHandler(TEMPLATE_PATH, excel_path, pass_threshold=threshold)
-        job["excel_path"] = excel_path
-        job["record_path"] = record_path
-
-        # ── 5. Audit loop ─────────────────────────────────────────────────────
-        log(f"Starting audit for {total} incident(s)...")
-
-        for idx, item in enumerate(audit_input, 1):
-            _raise_if_cancelled(cancel_check)
-            number = item["number"]
-
-            try:
-                incident_dict = item["incident_dict"]
-                # Log every ticket for accurate progress tracking
-                log(f"[{idx}/{total}] Auditing {number}...")
-                auditor       = Auditor(incident_dict)
-                audit_data    = auditor.get_audit_data()
-                scores        = _compute_score(audit_data, threshold)
-
-                excel.write_audit_row(audit_data)
-                log(f"  ✓ {number} audited")
-
-                tickets.append({
-                    "ticket_number" : audit_data.get("ticket_number", number),
-                    "created_by"    : audit_data.get("created_by", ""),
-                    "priority"      : audit_data.get("priority", ""),
-                    "resolver_group": audit_data.get("tcs_resolver_group", ""),
-                    "resolved_by"   : audit_data.get("resolved_by", ""),
-                    "short_description": incident_dict.get("short_description", ""),
-                    "metrics"       : {m: audit_data.get(m, "NA") for m in METRIC_MAX_SCORES},
-                    "score"         : scores["score"],
-                    "out_of"        : scores["out_of"],
-                    "percentage"    : scores["percentage"],
-                    "quality_result": scores["quality_result"],
-                    "observation"   : _build_observation(audit_data),
-                })
-
-            except Exception as e:
-                logger.exception(f"Error auditing {number}")
-                log(f"  ✗ {number} error: {e}")
-                tickets.append({
-                    "ticket_number" : number,
-                    "error"         : str(e),
-                    "metrics"       : {},
-                    "score"         : 0,
-                    "out_of"        : 0,
-                    "percentage"    : 0.0,
-                    "quality_result": "ERROR",
-                    "observation"   : str(e),
-                })
-
-            _raise_if_cancelled(cancel_check)
-
-        # ── 6. Save Excel ─────────────────────────────────────────────────────
-        log("Generating Excel report...")
-        excel.save()
-        log("Excel report saved")
-
-        # ── 7. Build summary ──────────────────────────────────────────────────
-        passed     = sum(1 for t in tickets if t["quality_result"] == "PASS")
-        failed     = sum(1 for t in tickets if t["quality_result"] == "FAIL")
-        errors     = sum(1 for t in tickets if t["quality_result"] == "ERROR")
-        valid      = [t for t in tickets if t["quality_result"] != "ERROR"]
-        avg_pct    = round(sum(t["percentage"] for t in valid) / len(valid), 1) if valid else 0.0
-        pass_pct   = round(passed / total * 100, 1) if total else 0.0
-
-        job["results"] = {
-            "status" : "completed",
-            "tickets": tickets,
-            "summary": {
-                "total"         : total,
-                "passed"        : passed,
-                "failed"        : failed,
-                "errors"        : errors,
-                "pass_pct"      : pass_pct,
-                "avg_score_pct" : avg_pct,
-                "threshold"     : threshold,
-                "date_range"    : {"start": start_date, "end": end_date},
-                "resolver_group": resolver_group or "All",
-            },
-            "metrics_summary": _build_metrics_summary(tickets),
-            "orchestration"  : {
-                "new"      : analysis["new_count"],
-                "modified" : analysis["modified_count"],
-                "unchanged": analysis["unchanged_count"],
-            },
-        }
-
-        audit_record = {
-            "job_id"    : job_id,
-            "status"    : "completed",
-            "created_at" : datetime.utcnow().isoformat(),
-            "finished_at": datetime.utcnow().isoformat(),
-            "params"    : job.get("params", {}),
-            "results"   : job["results"],
-        }
-        with open(record_path, "w", encoding="utf-8") as fh:
-            json.dump(audit_record, fh, indent=2, default=str)
-
-        job["status"] = "done"
-        log(f"Audit complete — {passed} PASS / {failed} FAIL / {errors} ERROR")
-
-    except JobCancelled as e:
-        logger.info("Audit job cancelled: %s", job_id)
-        log(str(e))
-        job["status"] = "cancelled"
-        job["error"] = str(e)
-        job["results"] = None
-
-    except Exception as e:
-        logger.exception("Fatal error in audit job")
-        log(f"FATAL: {e}")
-        job["status"]  = "error"
-        job["error"]   = str(e)
-        job["results"] = None
-
-    finally:
-        job["finished_at"] = time.time()
-        log_q.put("__CANCELLED__" if job.get("status") == "cancelled" else "__DONE__")
-
-
 def _build_observation(audit_data: dict) -> str:
-    """List the failed (No) metrics as a readable string."""
     LABELS = {
         "response_within_sla"      : "Response SLA not met",
         "short_desc_quality"       : "Short description unclear",
@@ -629,16 +251,11 @@ def _build_empty_result(threshold: float, analysis: dict) -> dict:
         "status" : "completed",
         "tickets": [],
         "summary": {
-            "total"         : 0,
-            "passed"        : 0,
-            "failed"        : 0,
-            "errors"        : 0,
-            "pass_pct"      : 0.0,
-            "avg_score_pct" : 0.0,
-            "threshold"     : threshold,
+            "total": 0, "passed": 0, "failed": 0, "errors": 0,
+            "pass_pct": 0.0, "avg_score_pct": 0.0, "threshold": threshold,
         },
         "metrics_summary": {},
-        "orchestration"  : {
+        "orchestration": {
             "new"      : analysis.get("new_count", 0),
             "modified" : analysis.get("modified_count", 0),
             "unchanged": analysis.get("unchanged_count", 0),
@@ -647,37 +264,256 @@ def _build_empty_result(threshold: float, analysis: dict) -> dict:
 
 
 # =============================================================================
+# Core audit runner (runs in a separate spawned process per job)
+# =============================================================================
+
+def _run_audit(
+    job_id        : str,
+    start_date    : str,
+    end_date      : str,
+    resolver_group: str,
+    threshold     : float,
+    record_path   : str,
+    redis_host    : str,
+    redis_port    : int,
+    redis_db      : int,
+    redis_password,   # str or None
+):
+    """
+    Full audit pipeline — runs in its own spawned process.
+    Communicates with the parent (Flask) exclusively through Redis.
+    """
+    # On Windows, spawn creates a fresh interpreter that re-imports main.py.
+    # load_dotenv() runs at module level so env vars are available, but we
+    # explicitly reload here as a safety net.
+    load_dotenv(ROOT_DIR / ".env")
+
+    # Each spawned process creates its own Redis connection.
+    sub_store = RedisJobStore(
+        host     = redis_host,
+        port     = redis_port,
+        db       = redis_db,
+        password = redis_password,
+    )
+
+    def log(msg: str):
+        ts  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        fmt = f"[{ts}] {msg}"
+        print(fmt, flush=True)   # always print — logger may not be configured in subprocess
+        logger.info(msg)
+        try:
+            sub_store.push_log(job_id, fmt)
+        except Exception as push_err:
+            print(f"[log push failed] {push_err}", flush=True)
+
+    def cancel_check() -> bool:
+        return sub_store.is_cancelled(job_id)
+
+    def raise_if_cancelled():
+        if cancel_check():
+            raise JobCancelled("Audit cancelled by user")
+
+    tickets = []
+
+    try:
+        raise_if_cancelled()
+
+        # ── 1. Init ───────────────────────────────────────────────────────────
+        log("Initialising components...")
+        fetcher      = IncidentFetcher(SN_INSTANCE, SN_USER, SN_PASSWORD, log_callback=log)
+        db_config    = DBConfig()
+        orchestrator = IncidentOrchestrator(db_config, fetcher)
+
+        raise_if_cancelled()
+
+        # ── 2. Fetch + store ──────────────────────────────────────────────────
+        log(f"Fetching incidents from {start_date} to {end_date}...")
+        orch_result = orchestrator.fetch_and_store(
+            start_date     = start_date,
+            end_date       = end_date,
+            ticket_type    = "incident",
+            resolver_group = resolver_group or None,
+            cancel_check   = cancel_check,
+        )
+        analysis = orch_result["analysis"]
+        if orch_result.get("cancelled"):
+            raise JobCancelled("Audit cancelled by user")
+        log(
+            f"Orchestration done — new:{analysis['new_count']} "
+            f"modified:{analysis['modified_count']} "
+            f"unchanged:{analysis['unchanged_count']}"
+        )
+
+        raise_if_cancelled()
+
+        # ── 3. Load from DB ───────────────────────────────────────────────────
+        log("Loading incidents from database...")
+        db_result    = orchestrator.get_incidents_in_database(start_date, end_date)
+        db_incidents = db_result["incidents"]
+        total        = db_result["count"]
+        log(f"Loaded {total} incident(s) from database for this range")
+
+        audit_input = []
+        if total > 0:
+            audit_input = [
+                {"number": inc.number, "incident_dict": _incident_orm_to_dict(inc)}
+                for inc in db_incidents.values()
+            ]
+            total = len(audit_input)
+        else:
+            fetched_incidents = [
+                inc for inc in (orch_result.get("fetched_incidents") or [])
+                if isinstance(inc, dict)
+            ]
+            if fetched_incidents:
+                log(f"No DB incidents; using {len(fetched_incidents)} freshly fetched.")
+                audit_input = [
+                    {"number": inc.get("number", "UNKNOWN"), "incident_dict": inc}
+                    for inc in fetched_incidents
+                ]
+                total = len(audit_input)
+
+        raise_if_cancelled()
+
+        if not audit_input:
+            log("No incidents found for the given filters.")
+            sub_store.finish_job(job_id, "done", results=_build_empty_result(threshold, analysis))
+            sub_store.push_log(job_id, "__DONE__")
+            return
+
+        # ── 4. Excel setup ────────────────────────────────────────────────────
+        excel_path = str(AUDITS_DIR / f"Audit_Report_{job_id}.xlsx")
+        log(f"Initialising Excel report → {excel_path}")
+        excel = ExcelHandler(TEMPLATE_PATH, excel_path, pass_threshold=threshold)
+        sub_store.set_job_field(job_id, "excel_path", excel_path)
+
+        # ── 5. Audit loop ─────────────────────────────────────────────────────
+        log(f"Starting audit for {total} incident(s)...")
+
+        for idx, item in enumerate(audit_input, 1):
+            raise_if_cancelled()
+            number = item["number"]
+            try:
+                incident_dict = item["incident_dict"]
+                auditor    = Auditor(incident_dict)
+                audit_data = auditor.get_audit_data()
+                scores     = _compute_score(audit_data, threshold)
+                excel.write_audit_row(audit_data)
+                # Single log per ticket — clean progress line, no extra ✓ noise
+                log(f"[{idx}/{total}] Audited {number}")
+                tickets.append({
+                    "ticket_number"    : audit_data.get("ticket_number", number),
+                    "created_by"       : audit_data.get("created_by", ""),
+                    "priority"         : audit_data.get("priority", ""),
+                    "resolver_group"   : audit_data.get("tcs_resolver_group", ""),
+                    "resolved_by"      : audit_data.get("resolved_by", ""),
+                    "short_description": incident_dict.get("short_description", ""),
+                    "metrics"          : {m: audit_data.get(m, "NA") for m in METRIC_MAX_SCORES},
+                    "score"            : scores["score"],
+                    "out_of"           : scores["out_of"],
+                    "percentage"       : scores["percentage"],
+                    "quality_result"   : scores["quality_result"],
+                    "observation"      : _build_observation(audit_data),
+                })
+            except JobCancelled:
+                raise
+            except Exception as e:
+                logger.exception(f"Error auditing {number}")
+                log(f"  ✗ {number} error: {e}")
+                tickets.append({
+                    "ticket_number": number, "error": str(e),
+                    "metrics": {}, "score": 0, "out_of": 0,
+                    "percentage": 0.0, "quality_result": "ERROR",
+                    "observation": str(e),
+                })
+            raise_if_cancelled()
+
+        # ── 6. Save Excel ─────────────────────────────────────────────────────
+        log("Generating Excel report...")
+        excel.save()
+        log("Excel report saved")
+
+        # ── 7. Build summary ──────────────────────────────────────────────────
+        passed  = sum(1 for t in tickets if t["quality_result"] == "PASS")
+        failed  = sum(1 for t in tickets if t["quality_result"] == "FAIL")
+        errors  = sum(1 for t in tickets if t["quality_result"] == "ERROR")
+        valid   = [t for t in tickets if t["quality_result"] != "ERROR"]
+        avg_pct = round(sum(t["percentage"] for t in valid) / len(valid), 1) if valid else 0.0
+
+        results = {
+            "status" : "completed",
+            "tickets": tickets,
+            "summary": {
+                "total"         : total,
+                "passed"        : passed,
+                "failed"        : failed,
+                "errors"        : errors,
+                "pass_pct"      : round(passed / total * 100, 1) if total else 0.0,
+                "avg_score_pct" : avg_pct,
+                "threshold"     : threshold,
+                "date_range"    : {"start": start_date, "end": end_date},
+                "resolver_group": resolver_group or "All",
+            },
+            "metrics_summary": _build_metrics_summary(tickets),
+            "orchestration"  : {
+                "new"      : analysis["new_count"],
+                "modified" : analysis["modified_count"],
+                "unchanged": analysis["unchanged_count"],
+            },
+        }
+
+        # Write JSON record to disk (unchanged behaviour)
+        audit_record = {
+            "job_id"     : job_id,
+            "status"     : "completed",
+            "created_at" : datetime.utcnow().isoformat(),
+            "finished_at": datetime.utcnow().isoformat(),
+            "params"     : {"start_date": start_date, "end_date": end_date,
+                            "resolver_group": resolver_group, "threshold": threshold},
+            "results"    : results,
+        }
+        with open(record_path, "w", encoding="utf-8") as fh:
+            json.dump(audit_record, fh, indent=2, default=str)
+
+        sub_store.finish_job(job_id, "done", results=results)
+        log(f"Audit complete — {passed} PASS / {failed} FAIL / {errors} ERROR")
+
+    except JobCancelled as e:
+        logger.info("Audit job cancelled: %s", job_id)
+        log(str(e))
+        sub_store.finish_job(job_id, "cancelled", error=str(e))
+
+    except Exception as e:
+        import traceback
+        err_detail = traceback.format_exc()
+        print(f"[SUBPROCESS FATAL] {err_detail}", flush=True)
+        logger.exception("Fatal error in audit job")
+        log(f"FATAL: {e}")
+        sub_store.finish_job(job_id, "error", error=str(e))
+
+    finally:
+        job = sub_store.get_job(job_id)
+        status = (job or {}).get("status", "error")
+        sub_store.push_log(job_id, "__CANCELLED__" if status == "cancelled" else "__DONE__")
+
+
+# =============================================================================
 # API Routes
 # =============================================================================
 
 @app.route("/api/health", methods=["GET"])
 def health():
+    redis_ok = store.ping()
     return jsonify({
         "status"   : "healthy",
+        "redis"    : "connected" if redis_ok else "unavailable",
         "timestamp": datetime.utcnow().isoformat(),
     }), 200
 
 
 @app.route("/api/generate-report", methods=["POST"])
 def generate_report():
-    """
-    Start an audit job.
-
-    Request body (JSON):
-    {
-        "start_date"     : "2026-04-01",        -- required, YYYY-MM-DD
-        "end_date"       : "2026-05-31",        -- required, YYYY-MM-DD
-        "resolver_group" : "TCS-INFRA-SUPPORT", -- optional
-        "threshold"      : 70                   -- optional, default 70
-    }
-
-    Response 202:
-    {
-        "job_id" : "abc123",
-        "status" : "running",
-        "message": "Audit started. Poll /api/report-status/<job_id> for progress."
-    }
-    """
+    """Start an audit job."""
     try:
         body = request.get_json(force=True) or {}
 
@@ -685,19 +521,14 @@ def generate_report():
         end_date       = (body.get("end_date")       or "").strip()
         resolver_group = (body.get("resolver_group") or "").strip()
 
-        # Validate required fields
         if not start_date or not end_date:
-            return jsonify({
-                "error": "start_date and end_date are required (YYYY-MM-DD)"
-            }), 400
+            return jsonify({"error": "start_date and end_date are required (YYYY-MM-DD)"}), 400
 
         try:
             datetime.strptime(start_date, "%Y-%m-%d")
             datetime.strptime(end_date,   "%Y-%m-%d")
         except ValueError:
-            return jsonify({
-                "error": "Invalid date format. Use YYYY-MM-DD"
-            }), 400
+            return jsonify({"error": "Invalid date format. Use YYYY-MM-DD"}), 400
 
         try:
             threshold = float(body.get("threshold", DEFAULT_THRESHOLD))
@@ -705,38 +536,23 @@ def generate_report():
             threshold = DEFAULT_THRESHOLD
 
         if not (0 <= threshold <= 100):
-            return jsonify({
-                "error": "threshold must be between 0 and 100"
-            }), 400
+            return jsonify({"error": "threshold must be between 0 and 100"}), 400
 
-        _cleanup_old_jobs()
-
-        # Create job
-        job_id = str(uuid.uuid4())[:12]
-        log_queue    = MP_CTX.Queue()
-        cancel_event = MP_CTX.Event()
-        excel_path   = str(AUDITS_DIR / f"Audit_Report_{job_id}.xlsx")
-        record_path  = str(AUDITS_DIR / f"Audit_Record_{job_id}.json")
-        JOBS[job_id] = {
-            "log_queue"  : log_queue,
-            "status"     : "running",
-            "cancel_requested": False,
-            "results"    : None,
-            "error"      : None,
-            "excel_path" : excel_path,
-            "record_path": record_path,
-            "process"    : None,
-            "cancel_event": cancel_event,
-            "finished_at": None,
-            "created_at" : time.time(),
-            "params"     : {
-                "start_date"    : start_date,
-                "end_date"      : end_date,
-                "resolver_group": resolver_group,
-                "threshold"     : threshold,
-            },
+        job_id      = str(uuid.uuid4())[:12]
+        excel_path  = str(AUDITS_DIR / f"Audit_Report_{job_id}.xlsx")
+        record_path = str(AUDITS_DIR / f"Audit_Record_{job_id}.json")
+        params      = {
+            "start_date"    : start_date,
+            "end_date"      : end_date,
+            "resolver_group": resolver_group,
+            "threshold"     : threshold,
         }
 
+        # Write job metadata to Redis — visible to ALL workers immediately
+        logger.info(f"[generate-report] About to create job {job_id} — store ping: {store.ping()} host={REDIS_HOST} port={REDIS_PORT}")
+        store.create_job(job_id, params, excel_path=excel_path, record_path=record_path)
+
+        # Spawn the audit process — passes only serialisable values
         process = MP_CTX.Process(
             target = _run_audit,
             args   = (
@@ -745,14 +561,16 @@ def generate_report():
                 end_date,
                 resolver_group,
                 threshold,
-                log_queue,
-                cancel_event,
                 record_path,
+                REDIS_HOST,
+                REDIS_PORT,
+                REDIS_DB,
+                REDIS_PASSWORD,
             ),
             daemon = True,
         )
         process.start()
-        JOBS[job_id]["process"] = process
+        _PROCESSES[job_id] = process
 
         logger.info(f"Audit job started: {job_id}")
 
@@ -761,11 +579,13 @@ def generate_report():
             "status" : "running",
             "message": (
                 f"Audit started for {start_date} → {end_date}. "
-                f"Poll GET /api/report-status/{job_id} to check progress. "
-                f"Fetch results with GET /api/report-results/{job_id} when done."
+                f"Poll GET /api/report-status/{job_id} to check progress."
             ),
         }), 202
 
+    except RedisUnavailableError as e:
+        logger.error("Redis unavailable — cannot start audit job: %s", e)
+        return jsonify({"error": f"Redis unavailable: {e}"}), 503
     except Exception as e:
         logger.exception("Error in /api/generate-report")
         return jsonify({"error": str(e)}), 500
@@ -773,58 +593,54 @@ def generate_report():
 
 @app.route("/api/cancel-report/<job_id>", methods=["POST"])
 def cancel_report(job_id: str):
-    if job_id not in JOBS:
+    """Request cancellation of a running audit job."""
+    if not store.job_exists(job_id):
         return jsonify({"error": f"Job {job_id} not found"}), 404
 
-    job = _terminate_job(job_id)
-    if not job:
-        return jsonify({"error": f"Job {job_id} not found"}), 404
+    # Step 1: cooperative cancel via Redis (works from any worker)
+    store.set_cancel(job_id)
+    store.push_log(job_id, "Cancellation requested by user...")
+
+    # Step 2: hard-stop fallback if this worker happens to own the process
+    process = _PROCESSES.get(job_id)
+    if process and process.is_alive():
+        process.terminate()
+        process.join(timeout=5)
+        if process.is_alive():
+            process.kill()
+            process.join(timeout=3)
+
+    store.set_job_field(job_id, "status", "cancelled")
+    store.set_job_field(job_id, "error",  "Audit cancelled by user")
+    store.set_job_field(job_id, "finished_at", str(time.time()))
+    store.push_log(job_id, "__CANCELLED__")
 
     return jsonify({
-        "job_id": job_id,
-        "status": "cancelled",
+        "job_id" : job_id,
+        "status" : "cancelled",
         "message": "Cancellation requested",
     }), 202
 
 
 @app.route("/api/cancel-report/", methods=["POST"])
 def cancel_report_active():
-    job_id = _find_active_job_id()
-    if not job_id:
+    """Cancel the most recently started running job (no job_id in URL)."""
+    active_ids = store.list_active_job_ids()
+    if not active_ids:
         return jsonify({"error": "No running job found"}), 404
-
-    _terminate_job(job_id)
-    return jsonify({
-        "job_id": job_id,
-        "status": "cancelled",
-        "message": "Cancellation requested",
-    }), 202
+    return cancel_report(active_ids[0])
 
 
 @app.route("/api/report-status/<job_id>", methods=["GET"])
 def report_status(job_id: str):
-    """
-    Poll job status.
-
-    Response:
-    {
-        "job_id" : "abc123",
-        "status" : "running" | "done" | "error"
-    }
-    """
-    if job_id not in JOBS:
-        return jsonify({"error": f"Job {job_id} not found"}), 404
-
-    job = _sync_job_state(job_id)
+    """Get the current status of an audit job."""
+    job = store.get_job(job_id)
     if not job:
         return jsonify({"error": f"Job {job_id} not found"}), 404
 
-    status = job["status"]
-    if status == "running" and job.get("cancel_requested"):
-        status = "cancelling"
     return jsonify({
         "job_id"   : job_id,
-        "status"   : status,
+        "status"   : job["status"],
         "params"   : job.get("params", {}),
         "timestamp": datetime.utcnow().isoformat(),
     }), 200
@@ -832,140 +648,61 @@ def report_status(job_id: str):
 
 @app.route("/api/report-results/<job_id>", methods=["GET"])
 def report_results(job_id: str):
-    """
-    Get the full audit results once the job is done.
-
-    Response shape:
-    {
-        "job_id": "abc123",
-        "status": "completed",
-        "results": {
-            "tickets": [
-                {
-                    "ticket_number"   : "INC0010047",
-                    "created_by"      : "System Administrator",
-                    "priority"        : "3 - Moderate",
-                    "resolver_group"  : "TCS-INFRA",
-                    "resolved_by"     : "John Doe",
-                    "short_description": "...",
-                    "metrics": {
-                        "response_within_sla"      : "Yes",
-                        "short_desc_quality"       : "Yes",
-                        "priority_reassessed"      : "NA",
-                        "incident_reassigned"      : "NA",
-                        "user_contact"             : "Yes",
-                        "pending_status"           : "NA",
-                        "work_notes_regular_update": "Yes",
-                        "resolution_notes_quality" : "Yes",
-                        "resolution_sla"           : "Yes",
-                        "user_confirmation"        : "Yes",
-                        "reopened_user_connect"    : "NA",
-                        "kba_education"            : "Yes"
-                    },
-                    "score"         : 75,
-                    "out_of"        : 80,
-                    "percentage"    : 93.8,
-                    "quality_result": "PASS",
-                    "observation"   : "All applicable metrics passed."
-                }
-            ],
-            "summary": {
-                "total"         : 10,
-                "passed"        : 8,
-                "failed"        : 2,
-                "errors"        : 0,
-                "pass_pct"      : 80.0,
-                "avg_score_pct" : 87.5,
-                "threshold"     : 70.0,
-                "date_range"    : {"start": "2026-04-01", "end": "2026-05-31"},
-                "resolver_group": "TCS-INFRA"
-            },
-            "metrics_summary": {
-                "response_within_sla": {
-                    "yes": 8, "no": 1, "na": 1,
-                    "applicable": 9, "pass_pct": 88.9, "max_score": 5
-                },
-                ...
-            },
-            "orchestration": { "new": 3, "modified": 1, "unchanged": 6 }
-        }
-    }
-    """
-    if job_id not in JOBS:
-        return jsonify({"error": f"Job {job_id} not found"}), 404
-
-    job = _sync_job_state(job_id)
+    """Get the final results of a completed audit job."""
+    job = store.get_job(job_id)
     if not job:
         return jsonify({"error": f"Job {job_id} not found"}), 404
 
-    if job["status"] == "cancelled":
-        return jsonify({
-            "job_id": job_id,
-            "status": "cancelled",
-            "error" : job.get("error", "Audit cancelled by user"),
-        }), 200
+    status = job["status"]
 
-    if job["status"] == "running":
-        return jsonify({
-            "job_id" : job_id,
-            "status" : "running",
-            "message": "Audit still in progress. Try again shortly.",
-        }), 202
+    if status == "cancelled":
+        return jsonify({"job_id": job_id, "status": "cancelled",
+                        "error": job.get("error", "Audit cancelled by user")}), 200
 
-    if job["status"] == "cancelling":
-        return jsonify({
-            "job_id" : job_id,
-            "status" : "cancelling",
-            "message": "Cancellation in progress. Try again shortly.",
-        }), 202
+    if status in ("running", "cancelling"):
+        return jsonify({"job_id": job_id, "status": status,
+                        "message": "Audit still in progress. Try again shortly."}), 202
 
-    if job["status"] == "error":
-        return jsonify({
-            "job_id": job_id,
-            "status": "error",
-            "error" : job.get("error"),
-        }), 500
+    if status == "error":
+        return jsonify({"job_id": job_id, "status": "error",
+                        "error": job.get("error")}), 500
 
-    if job["results"] is None:
-        record_path = job.get("record_path")
+    # status == "done"
+    results = job.get("results")
+
+    # Fallback: results not in Redis (e.g. TTL expired) → try disk record
+    if not results:
+        record_path = job.get("record_path", "")
         if record_path and os.path.exists(record_path):
             try:
                 with open(record_path, "r", encoding="utf-8") as fh:
                     payload = json.load(fh)
-                job["results"] = payload.get("results")
+                results = payload.get("results")
             except Exception as exc:
-                job["status"] = "error"
-                job["error"] = f"Failed to load audit record: {exc}"
-                return jsonify({
-                    "job_id": job_id,
-                    "status": "error",
-                    "error" : job["error"],
-                }), 500
+                return jsonify({"job_id": job_id, "status": "error",
+                                "error": f"Failed to load audit record: {exc}"}), 500
 
     return jsonify({
         "job_id"   : job_id,
         "status"   : "completed",
-        "results"  : job["results"],
+        "results"  : results,
         "timestamp": datetime.utcnow().isoformat(),
     }), 200
 
 
 @app.route("/api/report-stream/<job_id>", methods=["GET"])
 def report_stream(job_id: str):
-    """
-    Server-Sent Events stream — real-time log lines while audit runs.
-    Connect with EventSource in the browser.
-    """
-    if job_id not in JOBS:
+    """Server-Sent Events stream — real-time log lines while audit runs."""
+    if not store.job_exists(job_id):
         return jsonify({"error": f"Job {job_id} not found"}), 404
 
     def event_stream():
-        log_q = JOBS[job_id]["log_queue"]
         try:
             while True:
-                try:
-                    msg = log_q.get(timeout=20)
-                except queue.Empty:
+                msg = store.pop_log(job_id, timeout=20)
+
+                if msg is None:
+                    # Timeout — send a heartbeat so the browser doesn't close
                     yield ": heartbeat\n\n"
                     continue
 
@@ -987,8 +724,8 @@ def report_stream(job_id: str):
         event_stream(),
         mimetype = "text/event-stream",
         headers  = {
-            "Cache-Control"   : "no-cache",
-            "X-Accel-Buffering": "no",
+            "Cache-Control"            : "no-cache",
+            "X-Accel-Buffering"        : "no",
             "Access-Control-Allow-Origin": "*",
         },
     )
@@ -996,15 +733,11 @@ def report_stream(job_id: str):
 
 @app.route("/api/download-report/<job_id>", methods=["GET"])
 def download_report(job_id: str):
-    """Download the generated Excel report."""
-    if job_id not in JOBS:
-        return jsonify({"error": f"Job {job_id} not found"}), 404
-
-    job = _sync_job_state(job_id)
+    job = store.get_job(job_id)
     if not job:
         return jsonify({"error": f"Job {job_id} not found"}), 404
 
-    path = job.get("excel_path")
+    path = job.get("excel_path", "")
     if not path or not os.path.exists(path):
         return jsonify({"error": "Report file not ready or already deleted"}), 404
 
@@ -1018,17 +751,15 @@ def download_report(job_id: str):
 
 @app.route("/api/cleanup-audits", methods=["POST"])
 def cleanup_audits():
-    """Delete all files inside the audits folder without removing the folder itself."""
+    """Delete all files inside the audits folder without removing the folder."""
     deleted_files = []
     skipped_items = []
-    errors = []
-
+    errors        = []
     try:
         for entry in AUDITS_DIR.iterdir():
             if not entry.is_file():
                 skipped_items.append(entry.name)
                 continue
-
             try:
                 entry.unlink()
                 deleted_files.append(entry.name)
@@ -1036,11 +767,11 @@ def cleanup_audits():
                 errors.append(f"{entry.name}: {exc}")
 
         return jsonify({
-            "status": "ok",
+            "status"       : "ok",
             "deleted_count": len(deleted_files),
             "deleted_files": deleted_files,
             "skipped_items": skipped_items,
-            "errors": errors,
+            "errors"       : errors,
         }), 200
 
     except Exception as exc:

@@ -7,3 +7,4 @@ openai
 sqlalchemy
 psycopg2-binary
 gunicorn
+redis==4.6.0
