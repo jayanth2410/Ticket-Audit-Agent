@@ -28,16 +28,16 @@ METRIC_MAP = {
 
 # Max points per metric column
 METRIC_MAX_SCORES = {
-    "F": 5,
-    "G": 5,
-    "H": 10,
-    "I": 10,
-    "J": 10,
+    "F": 10,
+    "G": 10,
+    "H": 5,
+    "I": 5,
+    "J": 5,
     "K": 5,
     "L": 15,
     "M": 15,
     "N": 10,
-    "O": 5,
+    "O": 10,
     "P": 5,
     "Q": 5,
 }

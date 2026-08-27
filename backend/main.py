@@ -94,16 +94,16 @@ _PROCESSES: dict = {}   # job_id -> mp.Process
 
 # ── Metric definitions ────────────────────────────────────────────────────────
 METRIC_MAX_SCORES = {
-    "response_within_sla"      : 5,
-    "short_desc_quality"       : 5,
-    "priority_reassessed"      : 10,
-    "incident_reassigned"      : 10,
-    "user_contact"             : 10,
+    "response_within_sla"      : 10,
+    "short_desc_quality"       : 10,
+    "priority_reassessed"      : 5,
+    "incident_reassigned"      : 5,
+    "user_contact"             : 5,
     "pending_status"           : 5,
     "work_notes_regular_update": 15,
     "resolution_notes_quality" : 15,
     "resolution_sla"           : 10,
-    "user_confirmation"        : 5,
+    "user_confirmation"        : 10,
     "reopened_user_connect"    : 5,
     "kba_education"            : 5,
 }

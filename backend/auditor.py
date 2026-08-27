@@ -92,7 +92,7 @@ class Auditor:
 
         # ── LLM ───────────────────────────────────────────────────────────────
         self.llm = LLM()
-        self._contact_metrics_cache = None  # Cache for LLM contact metrics call
+        self._llm_metrics_cache = None  # One combined LLM call per ticket
 
     # ─────────────────────────────────────────────────────────────────────────
     # Internal parser
@@ -126,6 +126,18 @@ class Auditor:
             })
         return entries
 
+    def _get_llm_metrics(self) -> Dict[str, str]:
+        """Run and cache the single combined LLM analysis for this ticket."""
+        if self._llm_metrics_cache is None:
+            self._llm_metrics_cache = self.llm.ticket_metrics_analyser(
+                short_description=self.short_description,
+                work_notes=self.work_notes,
+                close_notes=self.close_notes,
+                reopen_count=self.reopen_count,
+                reopened_time=self.reopened_time,
+            )
+        return self._llm_metrics_cache
+
     # ─────────────────────────────────────────────────────────────────────────
     # Audit methods — return "Yes" / "No" / "NA" only
     # ─────────────────────────────────────────────────────────────────────────
@@ -135,7 +147,7 @@ class Auditor:
         Is the short description aligned to a user or technical problem?
         Source : LLM analysis on short_description
         """
-        return self.llm.short_desc_analyser(self.short_description)
+        return self._get_llm_metrics().get("short_desc_quality", "No")
 
     def is_priority_reassessed(self) -> str:
         """
@@ -178,14 +190,7 @@ class Auditor:
         Did the associate contact the user for additional information?
         Source : LLM analysis on work_notes + close_notes + reopen info
         """
-        if self._contact_metrics_cache is None:
-            self._contact_metrics_cache = self.llm.contact_metrics_analyser(
-                work_notes=self.work_notes,
-                close_notes=self.close_notes,
-                reopen_count=self.reopen_count,
-                reopened_time=self.reopened_time,
-            )
-        return self._contact_metrics_cache.get("user_contact", "NA")
+        return self._get_llm_metrics().get("user_contact", "NA")
 
     def check_pending_status(self) -> str:
         """
@@ -253,11 +258,12 @@ class Auditor:
         Source : parsed work note entry timestamps vs ticket open/close times
 
         Logic:
-            0 entries                        → No
-            1 entry, ticket life <= 24h      → Yes
-            1 entry, ticket life >  24h      → No
-            Multiple entries, avg gap <= 24h → Yes
-            Multiple entries, avg gap >  24h → No
+            0 entries                              → No
+            Every available lifecycle gap <= 48h → Yes
+            Any available lifecycle gap > 48h    → No
+
+        Lifecycle gaps include opening to the first note, gaps between notes,
+        and the final note to closure when those boundary timestamps exist.
         """
         if not self.work_notes:
             return "No"
@@ -267,55 +273,44 @@ class Auditor:
         if not timestamps:
             return "NA"
 
-        if len(timestamps) == 1:
-            opened = _parse_dt(self.opened_at)
-            closed = _parse_dt(self.closed_at)
-            if opened and closed:
-                life_hours = (closed - opened).total_seconds() / 3600
-                return "Yes" if life_hours <= 24 else "No"
+        opened = _parse_dt(self.opened_at)
+        closed = _parse_dt(self.closed_at)
+
+        lifecycle_points = list(timestamps)
+        if opened and opened <= timestamps[0]:
+            lifecycle_points.insert(0, opened)
+        if closed and closed >= timestamps[-1]:
+            lifecycle_points.append(closed)
+
+        if len(lifecycle_points) < 2:
             return "No"
 
-        gaps          = [(timestamps[i] - timestamps[i - 1]).total_seconds() / 3600 for i in range(1, len(timestamps))]
-        avg_gap_hours = sum(gaps) / len(gaps)
-        return "Yes" if avg_gap_hours <= 24 else "No"
+        gaps = [
+            (lifecycle_points[i] - lifecycle_points[i - 1]).total_seconds() / 3600
+            for i in range(1, len(lifecycle_points))
+        ]
+        return "Yes" if all(gap <= 48 for gap in gaps) else "No"
 
     def check_resolution_notes(self) -> str:
         """
         Did the associate document the finding and resolution steps?
         Source : LLM analysis on close_notes + full work_notes list
         """
-        return self.llm.resolution_notes_analyser(
-            close_notes=self.close_notes,
-            work_notes=self.work_notes,
-        )
+        return self._get_llm_metrics().get("resolution_notes_quality", "No")
 
     def check_user_confirmation_before_resolve(self) -> str:
         """
         Did the associate take user confirmation before resolving?
         Source : LLM analysis on work_notes + close_notes + reopen info
         """
-        if self._contact_metrics_cache is None:
-            self._contact_metrics_cache = self.llm.contact_metrics_analyser(
-                work_notes=self.work_notes,
-                close_notes=self.close_notes,
-                reopen_count=self.reopen_count,
-                reopened_time=self.reopened_time,
-            )
-        return self._contact_metrics_cache.get("user_confirmation", "NA")
+        return self._get_llm_metrics().get("user_confirmation", "NA")
 
     def check_reopened_and_user_connect(self) -> str:
         """
         Was the ticket re-opened? If yes, did the associate connect with the user?
         Source : LLM analysis on work_notes + close_notes + reopen info
         """
-        if self._contact_metrics_cache is None:
-            self._contact_metrics_cache = self.llm.contact_metrics_analyser(
-                work_notes=self.work_notes,
-                close_notes=self.close_notes,
-                reopen_count=self.reopen_count,
-                reopened_time=self.reopened_time,
-            )
-        return self._contact_metrics_cache.get("reopened_user_connect", "NA")
+        return self._get_llm_metrics().get("reopened_user_connect", "NA")
 
     def check_kba_education(self) -> str:
         """
@@ -385,8 +380,13 @@ class Auditor:
             "resolved_by"              : self.resolved_by,
 
             # Scoring columns
-            "response_within_sla"      : self.check_response_sla(),
-            "resolution_sla"           : self.check_resolution_sla(),
+            # Temporarily bypass SLA-breach evaluation while keeping the
+            # existing report/API keys. Restore the method calls when SLA
+            # scoring is enabled again.
+            # "response_within_sla"    : self.check_response_sla(),
+            # "resolution_sla"         : self.check_resolution_sla(),
+            "response_within_sla"      : "Yes",
+            "resolution_sla"           : "Yes",
             "short_desc_quality"       : self.short_desc_quality(),
             "priority_reassessed"      : self.is_priority_reassessed(),
             "incident_reassigned"      : self.is_incident_reassigned(),

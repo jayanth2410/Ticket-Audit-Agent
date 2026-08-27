@@ -14,6 +14,12 @@ let activeView       = 'audit';
 let resultFilter     = 'all';
 let allTickets       = [];
 
+// Health state must be initialized before init() calls checkHealth().
+let _healthFailCount = 0;
+let _healthCheckInProgress = false;
+let _healthTimer = null;
+const HEALTH_CHECK_INTERVAL_MS = 15000;
+
 // ── Metric labels / max scores ─────────────────────────────────────────────
 const METRIC_LABELS = {
   response_within_sla      : 'Response SLA',
@@ -81,7 +87,6 @@ const STEPS = [
 
   // Server health
   checkHealth();
-  setInterval(checkHealth, 15000);
 
   // Unload / refresh handling
   window.addEventListener('beforeunload', handleBeforeUnload);
@@ -180,9 +185,6 @@ function handleReloadCancelIfNeeded() {
 // ═══════════════════════════════════════════════════════════════════════════
 // Server health
 // ═══════════════════════════════════════════════════════════════════════════
-let _healthFailCount = 0;
-let _healthCheckInProgress = false;
-
 async function checkHealth() {
   // Prevent overlapping health checks
   if (_healthCheckInProgress) {
@@ -231,6 +233,8 @@ async function checkHealth() {
     }
   } finally {
     _healthCheckInProgress = false;
+    clearTimeout(_healthTimer);
+    _healthTimer = setTimeout(checkHealth, HEALTH_CHECK_INTERVAL_MS);
   }
 }
 
