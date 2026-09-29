@@ -337,19 +337,15 @@ class IncidentStorage:
             existing_incident (Incident): The existing incident to update
             incident_data (dict): New incident data
         """
-        # Update key fields
-        existing_incident.short_description = self._clean_string(incident_data.get('short_description'))
-        existing_incident.description = self._clean_string(incident_data.get('description'))
-        existing_incident.state = self._clean_string(incident_data.get('state'))
-        existing_incident.incident_state = self._clean_string(incident_data.get('incident_state'))
-        existing_incident.active = self._parse_boolean(incident_data.get('active'))
-        existing_incident.priority = self._clean_string(incident_data.get('priority'))
-        existing_incident.urgency = self._clean_string(incident_data.get('urgency'))
-        existing_incident.severity = self._clean_string(incident_data.get('severity'))
-        existing_incident.impact = self._clean_string(incident_data.get('impact'))
-        existing_incident.assigned_to = self._clean_string(incident_data.get('assigned_to'))
-        existing_incident.sys_updated_on = self._parse_datetime(incident_data.get('sys_updated_on'))
-        existing_incident.sys_updated_by = self._clean_string(incident_data.get('sys_updated_by'))
-        existing_incident.sla_data = incident_data.get('sla_data')
-        
+        # Reuse the same field mapping as inserts so a refreshed ticket updates
+        # every column used by the audit, not only a small subset of its fields.
+        refreshed = self._create_incident_object(incident_data)
+        immutable_or_managed = {'id', 'created_at', 'updated_at'}
+        for column in Incident.__table__.columns:
+            if column.name not in immutable_or_managed:
+                setattr(
+                    existing_incident,
+                    column.name,
+                    getattr(refreshed, column.name),
+                )
         session.add(existing_incident)
