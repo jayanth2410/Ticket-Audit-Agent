@@ -2,8 +2,8 @@
    AuditIQ — Frontend Script
    ══════════════════════════════════════════════════════════════════════════ */
 
-// const API = 'http://172.19.0.34/api';   // VM — swap to this when deployed
-const API   = 'http://localhost:5000/api'; // local dev
+const API = 'http://172.19.0.34/api';   // VM — swap to this when deployed
+//const API   = 'http://localhost:5000/api'; // local dev
 const STORAGE_KEY = 'auditiq_job_v2';
 
 // ── State ──────────────────────────────────────────────────────────────────
