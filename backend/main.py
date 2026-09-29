@@ -346,32 +346,17 @@ def _run_audit(
 
         raise_if_cancelled()
 
-        # ── 3. Load from DB ───────────────────────────────────────────────────
-        log("Loading incidents from database...")
-        db_result    = orchestrator.get_incidents_in_database(start_date, end_date)
-        db_incidents = db_result["incidents"]
-        total        = db_result["count"]
-        log(f"Loaded {total} incident(s) from database for this range")
-
+        # ── 3. Use the exact ServiceNow result set selected by the orchestrator ─
+        report_incidents = orch_result.get("report_incidents") or []
         audit_input = []
-        if total > 0:
-            audit_input = [
-                {"number": inc.number, "incident_dict": _incident_orm_to_dict(inc)}
-                for inc in db_incidents.values()
-            ]
-            total = len(audit_input)
-        else:
-            fetched_incidents = [
-                inc for inc in (orch_result.get("fetched_incidents") or [])
-                if isinstance(inc, dict)
-            ]
-            if fetched_incidents:
-                log(f"No DB incidents; using {len(fetched_incidents)} freshly fetched.")
-                audit_input = [
-                    {"number": inc.get("number", "UNKNOWN"), "incident_dict": inc}
-                    for inc in fetched_incidents
-                ]
-                total = len(audit_input)
+        for inc in report_incidents:
+            incident_dict = inc if isinstance(inc, dict) else _incident_orm_to_dict(inc)
+            audit_input.append({
+                "number": incident_dict.get("number", "UNKNOWN"),
+                "incident_dict": incident_dict,
+            })
+        total = len(audit_input)
+        log(f"Loaded {total} incident(s) selected from ServiceNow for this range")
 
         raise_if_cancelled()
 

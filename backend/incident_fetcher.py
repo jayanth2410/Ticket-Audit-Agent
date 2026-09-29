@@ -222,6 +222,7 @@ class IncidentFetcher:
         resolver_group : Optional[str] = None,
         limit          : int = DEFAULT_LIMIT,
         cancel_check   = None,
+        sys_ids        : Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Fetch all closed tickets within a date range and enrich each one
@@ -255,14 +256,21 @@ class IncidentFetcher:
         start_datetime = f"{start_date} 00:00:00"
         end_datetime   = f"{end_date} 23:59:59"
 
-        query_parts = [
-            f"state={CLOSED_STATE}",
-            f"closed_at>={start_datetime}",
-            f"closed_at<={end_datetime}",
-        ]
+        if sys_ids is not None:
+            # The orchestrator already selected these tickets from the authoritative
+            # ServiceNow date-range list. Fetch only their full current records.
+            if not sys_ids:
+                return []
+            query_parts = [f"sys_idIN{','.join(sys_ids)}"]
+        else:
+            query_parts = [
+                f"state={CLOSED_STATE}",
+                f"closed_at>={start_datetime}",
+                f"closed_at<={end_datetime}",
+            ]
 
-        if resolver_group:
-            query_parts.append(f"u_tcs_resolver_group={resolver_group}")
+            if resolver_group:
+                query_parts.append(f"u_tcs_resolver_group={resolver_group}")
 
         params = {
             "sysparm_query"                : "^".join(query_parts),

@@ -74,6 +74,22 @@ class IncidentOrchestrator:
         finally:
             session.close()
 
+    def get_incidents_by_sys_ids(self, sys_ids: List[str]) -> Dict[str, Any]:
+        """Load cached tickets by ServiceNow identity, independent of their current dates."""
+        if not sys_ids:
+            return {'incidents': {}, 'count': 0}
+        session = self.db_config.get_session()
+        try:
+            incidents = session.query(Incident).filter(Incident.sys_id.in_(sys_ids)).all()
+            # Materialize the relationship before closing the session; report
+            # conversion consumes cached audit history after this method returns.
+            for incident in incidents:
+                list(incident.audit_history or [])
+            incident_map = {incident.sys_id: incident for incident in incidents}
+            return {'incidents': incident_map, 'count': len(incident_map)}
+        finally:
+            session.close()
+
     def identify_incidents_to_fetch(
         self,
         start_date: str,
@@ -109,12 +125,7 @@ class IncidentOrchestrator:
         """
         self._log(f"Checking database for incidents in range {start_date} to {end_date}...")
         
-        # Step 1: Get what we have in the database
-        db_result = self.get_incidents_in_database(start_date, end_date)
-        db_incidents = db_result['incidents']
-        self._log(f"Found {db_result['count']} incidents in database cache")
-        
-        # Step 2: Fetch incident list from ServiceNow (without enrichment yet)
+        # Step 1: Fetch the authoritative ticket list from ServiceNow first.
         self._log(f"Querying ServiceNow for incident list {start_date} to {end_date}...")
         
         url = f"{self.fetcher.instance_url}/api/now/table/incident"
@@ -153,19 +164,21 @@ class IncidentOrchestrator:
         
         except Exception as e:
             self._log(f"Error fetching incident list from ServiceNow: {e}")
-            return {
-                'to_fetch': [],
-                'new_count': 0,
-                'modified_count': 0,
-                'unchanged_count': 0,
-                'total_in_range': 0,
-                'db_data': db_incidents
-            }
+            raise RuntimeError(f"Could not fetch the ServiceNow incident list: {e}") from e
         
         self._log(f"Found {len(sn_incidents)} incidents in ServiceNow for this date range")
+
+        # Cache lookup uses the exact ServiceNow IDs, not a second date filter.
+        # A ticket may have moved into/out of the requested range since it was cached.
+        db_result = self.get_incidents_by_sys_ids(
+            [item.get('sys_id') for item in sn_incidents if item.get('sys_id')]
+        )
+        db_incidents = db_result['incidents']
+        self._log(f"Found {db_result['count']} incidents in database cache")
         
         # Step 3: Compare and identify which to fetch
         to_fetch = []
+        to_fetch_sys_ids = []
         new_count = 0
         modified_count = 0
         unchanged_count = 0
@@ -177,6 +190,7 @@ class IncidentOrchestrator:
             
             if sys_id not in db_incidents:
                 to_fetch.append(number)
+                to_fetch_sys_ids.append(sys_id)
                 new_count += 1
             else:
                 db_incident = db_incidents[sys_id]
@@ -184,8 +198,9 @@ class IncidentOrchestrator:
                 try:
                     sn_dt = datetime.strptime(sn_updated_on, "%Y-%m-%d %H:%M:%S")
                     db_dt = db_updated_on if isinstance(db_updated_on, datetime) else datetime.now()
-                    if sn_dt > db_dt:
+                    if sn_dt != db_dt:
                         to_fetch.append(number)
+                        to_fetch_sys_ids.append(sys_id)
                         modified_count += 1
                     else:
                         # UNCHANGED
@@ -194,6 +209,7 @@ class IncidentOrchestrator:
                 except Exception as e:
                     self._log(f"Warning: timestamp compare failed for {number}: {e}")
                     to_fetch.append(number)
+                    to_fetch_sys_ids.append(sys_id)
                     modified_count += 1
         
         self._log(
@@ -204,6 +220,8 @@ class IncidentOrchestrator:
 
         return {
             'to_fetch': to_fetch,
+            'to_fetch_sys_ids': to_fetch_sys_ids,
+            'sn_incidents': sn_incidents,
             'new_count': new_count,
             'modified_count': modified_count,
             'unchanged_count': unchanged_count,
@@ -267,6 +285,7 @@ class IncidentOrchestrator:
                 end_date=end_date,
                 resolver_group=resolver_group,
                 cancel_check=cancel_check,
+                sys_ids=analysis['to_fetch_sys_ids'],
             )
 
             if cancel_check and cancel_check():
@@ -278,8 +297,8 @@ class IncidentOrchestrator:
                     'cancelled': True,
                 }
             
-            to_fetch_set = set(analysis['to_fetch'])
-            filtered_incidents = [inc for inc in enriched_incidents if inc.get('number') in to_fetch_set]
+            to_fetch_set = set(analysis['to_fetch_sys_ids'])
+            filtered_incidents = [inc for inc in enriched_incidents if inc.get('sys_id') in to_fetch_set]
             self._log(f"Fetched and enriched {len(filtered_incidents)} incidents")
         else:
             self._log("All incidents in date range are already cached and unchanged")
@@ -310,6 +329,25 @@ class IncidentOrchestrator:
                 'total': 0,
                 'errors': []
             }
+
+        # Build the exact report input from ServiceNow's list and the now-current
+        # cache. This preserves list order and prevents date-window drift from
+        # changing the number of rows in the Excel report.
+        final_db = self.get_incidents_by_sys_ids(
+            [item.get('sys_id') for item in analysis['sn_incidents'] if item.get('sys_id')]
+        )['incidents']
+        fetched_by_id = {item.get('sys_id'): item for item in filtered_incidents}
+        report_incidents = []
+        for sn_item in analysis['sn_incidents']:
+            sys_id = sn_item.get('sys_id')
+            record = fetched_by_id.get(sys_id) or final_db.get(sys_id)
+            if record is not None:
+                report_incidents.append(record)
+            else:
+                raise RuntimeError(
+                    f"Incident {sn_item.get('number', sys_id)} was listed by ServiceNow "
+                    "but is missing from both the database and fetched records"
+                )
         
         # Step 4: Final summary
         self._log(
@@ -323,6 +361,7 @@ class IncidentOrchestrator:
             'analysis': analysis,
             'fetched_count': len(filtered_incidents),
             'fetched_incidents': filtered_incidents,
+            'report_incidents': report_incidents,
             'storage_results': storage_results,
             'cancelled': False,
         }
